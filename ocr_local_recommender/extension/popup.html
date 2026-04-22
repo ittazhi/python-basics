@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>OCR Local Recommender</title>
+  <style>
+    :root {
+      --bg: #f5efe5;
+      --panel: #fffaf3;
+      --line: #d9ceb9;
+      --text: #1f2937;
+      --muted: #6b7280;
+      --accent: #0f766e;
+      --accent-soft: #def4ef;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-width: 320px;
+      font-family: "IBM Plex Sans", "Noto Sans", sans-serif;
+      background: radial-gradient(circle at top left, #fff6e7 0%, var(--bg) 60%, #e7dfd2 100%);
+      color: var(--text);
+    }
+
+    .wrap {
+      padding: 14px;
+      display: grid;
+      gap: 12px;
+    }
+
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      padding: 12px;
+      box-shadow: 0 10px 30px rgba(31, 41, 55, 0.08);
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 15px;
+    }
+
+    p {
+      margin: 4px 0 0;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    label {
+      display: grid;
+      gap: 6px;
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    input[type="text"] {
+      width: 100%;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 8px 10px;
+      font: inherit;
+      background: #fff;
+      color: var(--text);
+    }
+
+    .row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+    }
+
+    .status-pill {
+      border-radius: 999px;
+      padding: 3px 10px;
+      font-size: 12px;
+      font-weight: 600;
+      background: var(--accent-soft);
+      color: var(--accent);
+      border: 1px solid #b7ddd2;
+    }
+
+    .status-pill.offline {
+      background: #f8ece8;
+      border-color: #e5b9ad;
+      color: #b45309;
+    }
+
+    .toggle {
+      appearance: none;
+      width: 46px;
+      height: 28px;
+      border-radius: 999px;
+      background: #cbd5e1;
+      position: relative;
+      cursor: pointer;
+      transition: background 0.15s ease;
+    }
+
+    .toggle::after {
+      content: "";
+      width: 22px;
+      height: 22px;
+      border-radius: 50%;
+      background: #fff;
+      position: absolute;
+      top: 3px;
+      left: 3px;
+      transition: transform 0.15s ease;
+      box-shadow: 0 2px 8px rgba(31, 41, 55, 0.2);
+    }
+
+    .toggle:checked {
+      background: var(--accent);
+    }
+
+    .toggle:checked::after {
+      transform: translateX(18px);
+    }
+
+    button {
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: #fff;
+      color: var(--text);
+      padding: 8px 10px;
+      font: inherit;
+      cursor: pointer;
+    }
+
+    .primary {
+      background: #103b34;
+      border-color: #103b34;
+      color: #fff;
+    }
+
+    .actions {
+      display: flex;
+      gap: 8px;
+    }
+
+    .note {
+      font-size: 11px;
+      color: var(--muted);
+      line-height: 1.5;
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <h1>OCR Local Recommender</h1>
+      <p>Local page capture, local ranking, local history.</p>
+    </div>
+
+    <div class="card">
+      <div class="row">
+        <div>
+          <div style="font-size: 12px; color: var(--muted);">Extension status</div>
+          <strong id="enabled-label">Enabled</strong>
+        </div>
+        <input id="enabled-toggle" class="toggle" type="checkbox" checked>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="row" style="margin-bottom: 8px;">
+        <div style="font-size: 12px; color: var(--muted);">Backend</div>
+        <div id="health-pill" class="status-pill offline">Checking</div>
+      </div>
+      <label>
+        Local API base
+        <input id="api-base" type="text" value="http://127.0.0.1:8765">
+      </label>
+      <div class="actions" style="margin-top: 10px;">
+        <button id="save-config" class="primary">Save</button>
+        <button id="refresh-health">Refresh</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="actions">
+        <button id="open-dashboard" class="primary">Open Dashboard</button>
+      </div>
+      <p class="note">
+        When the backend is reachable, the content script can capture visible labels, submit snapshots, and show inline suggestions.
+      </p>
+    </div>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
