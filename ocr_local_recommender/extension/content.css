@@ -40,11 +40,14 @@
   padding: 12px 14px;
   border-bottom: 1px solid #e4dac6;
   background: rgba(255, 255, 255, 0.85);
+  cursor: move;
+  user-select: none;
 }
 
 .ocr-lr-popover-title {
   display: grid;
   gap: 3px;
+  min-width: 0;
 }
 
 .ocr-lr-popover-title strong {
@@ -67,6 +70,31 @@
   padding: 5px 10px;
   font: inherit;
   cursor: pointer;
+  white-space: nowrap;
+}
+
+.ocr-lr-panel-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.ocr-lr-drag-hint {
+  color: #9ca3af;
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.ocr-lr-popover[data-dragging="true"],
+.ocr-lr-sidebar[data-dragging="true"] {
+  cursor: grabbing;
+}
+
+.ocr-lr-popover[data-dragging="true"] *,
+.ocr-lr-sidebar[data-dragging="true"] * {
+  cursor: grabbing;
+  user-select: none;
 }
 
 .ocr-lr-list {
@@ -169,8 +197,18 @@
 .ocr-lr-sidebar-head {
   padding: 14px 16px;
   border-bottom: 1px solid #e4dac6;
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+  cursor: move;
+  user-select: none;
+}
+
+.ocr-lr-sidebar-title {
   display: grid;
   gap: 4px;
+  min-width: 0;
 }
 
 .ocr-lr-sidebar-body {

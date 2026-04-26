@@ -1,5 +1,6 @@
 (function () {
   const GLOBAL_FLAG = "__ocrLocalRecommenderLoaded";
+  const UI_POSITION_KEY = "ocrLocalRecommenderUiPositions";
   if (window[GLOBAL_FLAG]) {
     return;
   }
@@ -49,6 +50,11 @@
     lastSnapshotSignature: "",
     lastCommitSignature: "",
     acceptedCandidate: null,
+    uiPositions: {
+      popover: null,
+      sidebar: null
+    },
+    drag: null,
     ui: null,
     observer: null
   };
@@ -87,6 +93,8 @@
 
     if (state.isTopFrame) {
       createUi();
+      await loadUiPositions();
+      applyPanelPosition("sidebar");
       scheduleSnapshotCapture("init", 60);
     } else {
       scheduleFramePublish("init", 120);
@@ -134,20 +142,27 @@
     root.id = "ocr-local-recommender-root";
     root.innerHTML = `
       <div class="ocr-lr-popover" data-visible="false">
-        <div class="ocr-lr-popover-head">
+        <div class="ocr-lr-popover-head" data-drag-handle="popover" title="Drag to move">
           <div class="ocr-lr-popover-title">
             <strong>Local suggestions</strong>
             <span id="ocr-lr-status">Waiting for focus</span>
           </div>
-          <button class="ocr-lr-inline-button" data-action="open-search">Search all</button>
+          <div class="ocr-lr-panel-actions">
+            <span class="ocr-lr-drag-hint">Drag title</span>
+            <button class="ocr-lr-inline-button" data-action="open-search">Search all</button>
+            <button class="ocr-lr-inline-button" data-action="reset-popover">Reset</button>
+          </div>
         </div>
         <div class="ocr-lr-list"></div>
         <div class="ocr-lr-footer">Arrow keys to browse, Ctrl+Enter to accept, Ctrl/Cmd+Shift+K for global search.</div>
       </div>
       <aside class="ocr-lr-sidebar" data-visible="false">
-        <div class="ocr-lr-sidebar-head">
-          <strong>Current context</strong>
-          <span class="ocr-lr-meta" id="ocr-lr-context-meta">No active field</span>
+        <div class="ocr-lr-sidebar-head" data-drag-handle="sidebar" title="Drag to move">
+          <div class="ocr-lr-sidebar-title">
+            <strong>Current context</strong>
+            <span class="ocr-lr-meta" id="ocr-lr-context-meta">No active field</span>
+          </div>
+          <button class="ocr-lr-inline-button" data-action="reset-sidebar">Reset</button>
         </div>
         <div class="ocr-lr-sidebar-body"></div>
       </aside>
@@ -170,6 +185,12 @@
     root.querySelector("[data-action='open-search']").addEventListener("click", () => {
       void openSearchModal();
     });
+    root.querySelector("[data-action='reset-popover']").addEventListener("click", () => {
+      resetPanelPosition("popover");
+    });
+    root.querySelector("[data-action='reset-sidebar']").addEventListener("click", () => {
+      resetPanelPosition("sidebar");
+    });
     root.querySelector("[data-action='close-search']").addEventListener("click", closeSearchModal);
     root.querySelector("[data-action='run-search']").addEventListener("click", () => {
       void runSearch(root.querySelector("#ocr-lr-search-input").value);
@@ -185,6 +206,7 @@
         event.preventDefault();
       }
     });
+    root.addEventListener("pointerdown", handlePanelPointerDown);
 
     state.ui = {
       root,
@@ -264,6 +286,7 @@
     }
     if (state.isTopFrame) {
       positionPopover();
+      applyPanelPosition("sidebar");
       scheduleSnapshotCapture("viewport", 420);
     } else {
       scheduleFramePublish("viewport", 420);
@@ -908,6 +931,10 @@
     if (!state.ui || !state.activeTarget || !document.contains(state.activeTarget)) {
       return;
     }
+    if (state.uiPositions.popover) {
+      applyPanelPosition("popover");
+      return;
+    }
     const rect = state.activeTarget.getBoundingClientRect();
     const popover = state.ui.popover;
     const width = Math.min(380, window.innerWidth - 24);
@@ -926,7 +953,6 @@
     if (!state.ui) {
       return;
     }
-    positionPopover();
     const list = state.ui.list;
     if (!state.suggestions.length || !state.activeTarget) {
       list.innerHTML = "";
@@ -936,6 +962,7 @@
 
     list.innerHTML = "";
     state.ui.popover.dataset.visible = "true";
+    positionPopover();
     state.suggestions.forEach((item, index) => {
       const button = document.createElement("button");
       button.className = "ocr-lr-item";
@@ -1037,6 +1064,167 @@
   function hidePopover() {
     if (state.ui) {
       state.ui.popover.dataset.visible = "false";
+    }
+  }
+
+  async function loadUiPositions() {
+    try {
+      const stored = await chrome.storage.local.get(UI_POSITION_KEY);
+      const positions = stored[UI_POSITION_KEY] || {};
+      state.uiPositions = {
+        popover: parsePanelPosition(positions.popover),
+        sidebar: parsePanelPosition(positions.sidebar)
+      };
+    } catch (error) {
+      state.uiPositions = {
+        popover: null,
+        sidebar: null
+      };
+    }
+  }
+
+  function parsePanelPosition(value) {
+    if (!value || typeof value !== "object") {
+      return null;
+    }
+    const left = Number(value.left);
+    const top = Number(value.top);
+    if (!Number.isFinite(left) || !Number.isFinite(top)) {
+      return null;
+    }
+    return { left, top };
+  }
+
+  function handlePanelPointerDown(event) {
+    if (!state.ui || event.button !== 0 || event.target.closest("button, input, textarea, select, a")) {
+      return;
+    }
+    const handle = event.target.closest("[data-drag-handle]");
+    if (!handle || !state.ui.root.contains(handle)) {
+      return;
+    }
+
+    const panelName = handle.dataset.dragHandle;
+    const panel = getPanelElement(panelName);
+    if (!panel || panel.dataset.visible !== "true") {
+      return;
+    }
+
+    const rect = panel.getBoundingClientRect();
+    state.drag = {
+      panelName,
+      offsetX: event.clientX - rect.left,
+      offsetY: event.clientY - rect.top,
+      width: rect.width,
+      height: rect.height
+    };
+    panel.dataset.dragging = "true";
+    document.addEventListener("pointermove", handlePanelPointerMove, true);
+    document.addEventListener("pointerup", handlePanelPointerUp, true);
+    document.addEventListener("pointercancel", handlePanelPointerUp, true);
+    event.preventDefault();
+  }
+
+  function handlePanelPointerMove(event) {
+    if (!state.drag) {
+      return;
+    }
+    const next = clampPanelPosition(
+      event.clientX - state.drag.offsetX,
+      event.clientY - state.drag.offsetY,
+      state.drag.width,
+      state.drag.height
+    );
+    state.uiPositions[state.drag.panelName] = next;
+    applyPanelPosition(state.drag.panelName);
+    event.preventDefault();
+  }
+
+  function handlePanelPointerUp() {
+    if (!state.drag) {
+      return;
+    }
+    const panel = getPanelElement(state.drag.panelName);
+    if (panel) {
+      delete panel.dataset.dragging;
+    }
+    document.removeEventListener("pointermove", handlePanelPointerMove, true);
+    document.removeEventListener("pointerup", handlePanelPointerUp, true);
+    document.removeEventListener("pointercancel", handlePanelPointerUp, true);
+    state.drag = null;
+    void saveUiPositions();
+  }
+
+  function getPanelElement(panelName) {
+    if (!state.ui) {
+      return null;
+    }
+    if (panelName === "popover") {
+      return state.ui.popover;
+    }
+    if (panelName === "sidebar") {
+      return state.ui.sidebar;
+    }
+    return null;
+  }
+
+  function applyPanelPosition(panelName) {
+    const panel = getPanelElement(panelName);
+    const position = state.uiPositions[panelName];
+    if (!panel || !position) {
+      return;
+    }
+
+    const rect = panel.getBoundingClientRect();
+    const fallbackWidth = panelName === "popover"
+      ? Math.min(380, window.innerWidth - 24)
+      : Math.min(360, window.innerWidth - 32);
+    const fallbackHeight = panelName === "popover" ? 260 : Math.min(420, window.innerHeight - 32);
+    const next = clampPanelPosition(
+      position.left,
+      position.top,
+      rect.width || fallbackWidth,
+      rect.height || fallbackHeight
+    );
+    state.uiPositions[panelName] = next;
+    panel.style.left = `${next.left}px`;
+    panel.style.top = `${next.top}px`;
+    panel.style.right = "auto";
+    panel.style.bottom = "auto";
+    panel.dataset.positionMode = "manual";
+  }
+
+  function clampPanelPosition(left, top, width, height) {
+    const margin = 8;
+    const maxLeft = Math.max(margin, window.innerWidth - Math.max(width, 1) - margin);
+    const maxTop = Math.max(margin, window.innerHeight - Math.max(height, 1) - margin);
+    return {
+      left: Math.round(Math.min(Math.max(margin, left), maxLeft)),
+      top: Math.round(Math.min(Math.max(margin, top), maxTop))
+    };
+  }
+
+  function resetPanelPosition(panelName) {
+    state.uiPositions[panelName] = null;
+    const panel = getPanelElement(panelName);
+    if (panel) {
+      panel.style.left = "";
+      panel.style.top = "";
+      panel.style.right = "";
+      panel.style.bottom = "";
+      delete panel.dataset.positionMode;
+    }
+    if (panelName === "popover") {
+      positionPopover();
+    }
+    void saveUiPositions();
+  }
+
+  async function saveUiPositions() {
+    try {
+      await chrome.storage.local.set({ [UI_POSITION_KEY]: state.uiPositions });
+    } catch (error) {
+      // Position persistence is optional; dragging should keep working for this page.
     }
   }
 
