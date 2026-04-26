@@ -11,6 +11,8 @@ Local-only OCR annotation assistant with:
 
 ```text
 ocr_local_recommender/
+  start_backend.command  # macOS double-click backend starter
+  .venv/                 # local Python environment, created automatically
   backend/
     app/
       main.py            # FastAPI app and HTTP endpoints
@@ -31,24 +33,32 @@ ocr_local_recommender/
 
 ## Run Backend
 
-Use the workspace virtual environment:
+On macOS, double-click:
+
+```text
+start_backend.command
+```
+
+The script creates or repairs `.venv/` inside this folder, installs backend dependencies, and starts the local API at `http://127.0.0.1:8765`. If normal pip installation hits a local certificate issue, the script retries with trusted PyPI hosts automatically.
+
+Equivalent terminal command:
 
 ```bash
-cd "/Users/max/Desktop/vs code/ocr_local_recommender/backend"
-"/Users/max/Desktop/vs code/.venv/bin/python" -m pip install -r requirements.txt
-"/Users/max/Desktop/vs code/.venv/bin/python" -m uvicorn app.main:app --host 127.0.0.1 --port 8765
+cd "/path/to/ocr_local_recommender"
+./start_backend.command
 ```
 
 If local pip has certificate issues, retry the install with:
 
 ```bash
-"/Users/max/Desktop/vs code/.venv/bin/python" -m pip install --trusted-host pypi.org --trusted-host files.pythonhosted.org -r requirements.txt
+"./.venv/bin/python" -m pip install --trusted-host pypi.org --trusted-host files.pythonhosted.org -r backend/requirements.txt
 ```
 
 The backend stores data in `backend/data/` by default. To use a different location:
 
 ```bash
-OCR_RECOMMENDER_DATA_DIR="/path/to/data" "/Users/max/Desktop/vs code/.venv/bin/python" -m uvicorn app.main:app --host 127.0.0.1 --port 8765
+cd "/path/to/ocr_local_recommender/backend"
+OCR_RECOMMENDER_DATA_DIR="/path/to/data" "../.venv/bin/python" -m uvicorn app.main:app --host 127.0.0.1 --port 8765
 ```
 
 ## Load Extension
@@ -59,7 +69,13 @@ OCR_RECOMMENDER_DATA_DIR="/path/to/data" "/Users/max/Desktop/vs code/.venv/bin/p
 4. Select:
 
 ```text
-/Users/max/Desktop/vs code/ocr_local_recommender/extension
+/path/to/ocr_local_recommender/extension
+```
+
+If the folder is currently on the Desktop, select:
+
+```text
+/Users/max/Desktop/ocr_local_recommender/extension
 ```
 
 Open the extension popup to verify the backend is online. The dashboard is available from the popup.
@@ -91,8 +107,7 @@ Open the extension popup to verify the backend is online. The dashboard is avail
 ## Verify
 
 ```bash
-cd "/Users/max/Desktop/vs code/ocr_local_recommender/backend"
-"/Users/max/Desktop/vs code/.venv/bin/python" -m unittest discover -s tests
-node --check "/Users/max/Desktop/vs code/ocr_local_recommender/extension/content.js"
+cd "/path/to/ocr_local_recommender/backend"
+"../.venv/bin/python" -m unittest discover -s tests
+node --check "../extension/content.js"
 ```
-
