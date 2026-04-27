@@ -154,7 +154,7 @@
           </div>
         </div>
         <div class="ocr-lr-list"></div>
-        <div class="ocr-lr-footer">Arrow keys to browse, Ctrl+Enter to accept, Ctrl/Cmd+Shift+K for global search.</div>
+        <div class="ocr-lr-footer">Click a card or press Option+1-5. Arrow keys + Option+Enter accept the selected card.</div>
       </div>
       <aside class="ocr-lr-sidebar" data-visible="false">
         <div class="ocr-lr-sidebar-head" data-drag-handle="sidebar" title="Drag to move">
@@ -351,7 +351,7 @@
       return;
     }
 
-    if (event.ctrlKey && event.key === "Enter") {
+    if (isAcceptShortcut(event)) {
       event.preventDefault();
       const suggestion = state.suggestions[state.selectedIndex];
       if (suggestion) {
@@ -360,14 +360,33 @@
       return;
     }
 
-    if (event.altKey && /^[1-5]$/.test(event.key)) {
-      const index = Number(event.key) - 1;
+    const directPickIndex = getDirectPickShortcutIndex(event);
+    if (directPickIndex >= 0) {
+      const index = directPickIndex;
       const suggestion = state.suggestions[index];
       if (suggestion) {
         event.preventDefault();
         void acceptSuggestion(suggestion);
       }
     }
+  }
+
+  function isAcceptShortcut(event) {
+    return event.altKey && !event.ctrlKey && !event.metaKey && event.key === "Enter";
+  }
+
+  function getDirectPickShortcutIndex(event) {
+    if (!event.altKey || event.ctrlKey || event.metaKey) {
+      return -1;
+    }
+    const codeMatch = /^Digit([1-5])$/.exec(event.code || "");
+    if (codeMatch) {
+      return Number(codeMatch[1]) - 1;
+    }
+    if (/^[1-5]$/.test(event.key)) {
+      return Number(event.key) - 1;
+    }
+    return -1;
   }
 
   function scheduleSuggest(reason, delay) {
@@ -919,7 +938,10 @@
     const frames = document.querySelectorAll("iframe");
     for (const frame of frames) {
       try {
-        void frame.contentDocument;
+        const frameDocument = frame.contentDocument;
+        if (!frameDocument) {
+          unreadable.push(frame.src || "cross-origin-iframe");
+        }
       } catch (error) {
         unreadable.push(frame.src || "cross-origin-iframe");
       }
@@ -937,7 +959,7 @@
     }
     const rect = state.activeTarget.getBoundingClientRect();
     const popover = state.ui.popover;
-    const width = Math.min(380, window.innerWidth - 24);
+    const width = Math.min(460, window.innerWidth - 24);
     const left = Math.min(
       Math.max(12, rect.left),
       Math.max(12, window.innerWidth - width - 12)
@@ -967,10 +989,15 @@
       const button = document.createElement("button");
       button.className = "ocr-lr-item";
       button.dataset.active = index === state.selectedIndex ? "true" : "false";
+      button.dataset.primary = index === 0 ? "true" : "false";
       button.innerHTML = `
+        <div class="ocr-lr-shortcut-badge">⌥${index + 1}</div>
         <div class="ocr-lr-item-top">
           <div class="ocr-lr-item-text">${escapeHtml(item.text)}</div>
-          <span class="ocr-lr-pill" data-tier="${escapeHtml(item.tier)}">${escapeHtml(item.tier)}</span>
+          <div class="ocr-lr-item-actions">
+            <span class="ocr-lr-pill" data-tier="${escapeHtml(item.tier)}">${escapeHtml(item.tier)}</span>
+            <span class="ocr-lr-use-pill">Use</span>
+          </div>
         </div>
         <div class="ocr-lr-meta">${escapeHtml(item.source_preview || "")}</div>
         <div class="ocr-lr-reasons">
@@ -1177,7 +1204,7 @@
 
     const rect = panel.getBoundingClientRect();
     const fallbackWidth = panelName === "popover"
-      ? Math.min(380, window.innerWidth - 24)
+      ? Math.min(460, window.innerWidth - 24)
       : Math.min(360, window.innerWidth - 32);
     const fallbackHeight = panelName === "popover" ? 260 : Math.min(420, window.innerHeight - 32);
     const next = clampPanelPosition(
