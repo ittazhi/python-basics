@@ -6,7 +6,15 @@ from difflib import SequenceMatcher
 from typing import Any, Optional
 
 from .models import SampleSnapshotPayload, SearchRequest, SuggestionRequest
-from .normalization import count_label_types, is_long_digit_like, normalize_text
+from .normalization import (
+    canonical_label_type,
+    classify_value,
+    count_label_types,
+    is_long_digit_like,
+    normalize_text,
+    same_value_family,
+    value_family,
+)
 from .storage import Storage
 
 
@@ -31,6 +39,44 @@ def _overlap_ratio(left: Counter[str], right: Counter[str]) -> float:
     if total == 0:
         return 0.0
     return common / total
+
+
+def _canonical_counts(counts: dict[str, int]) -> Counter[str]:
+    canonical: Counter[str] = Counter()
+    for label_type, count in counts.items():
+        normalized_type = canonical_label_type(label_type)
+        if normalized_type:
+            canonical[normalized_type] += count
+    return canonical
+
+
+def _label_sequence(labels: list[Any]) -> list[str]:
+    sequence: list[str] = []
+    for label in labels:
+        if isinstance(label, dict):
+            label_type = label.get("label_type", "")
+        else:
+            label_type = getattr(label, "label_type", "")
+        canonical = canonical_label_type(label_type)
+        if canonical:
+            sequence.append(canonical)
+    return sequence
+
+
+def _sequence_similarity(left: list[str], right: list[str]) -> float:
+    if not left or not right:
+        return 0.0
+    return SequenceMatcher(None, left, right).ratio()
+
+
+def _label_similarity(left: str, right: str) -> float:
+    left_normalized = canonical_label_type(left)
+    right_normalized = canonical_label_type(right)
+    if not left_normalized or not right_normalized:
+        return 0.0
+    if left_normalized == right_normalized:
+        return 1.0
+    return SequenceMatcher(None, left_normalized, right_normalized).ratio()
 
 
 def _bounded_edit_distance(left: str, right: str, limit: int = 1) -> int:
@@ -89,9 +135,19 @@ class SuggestionEngine:
         # tolerance from being defeated by a strict SQL substring prefilter.
         candidates = self.storage.fetch_candidate_bundles(include_weak=include_weak, query="")
         current_type = snapshot.target_label_type if snapshot else ""
+        current_canonical_type = canonical_label_type(current_type)
         current_region = snapshot.target_region if snapshot else ""
-        current_counts = Counter(snapshot.label_type_counts or count_label_types(snapshot.visible_labels)) if snapshot else Counter()
-        current_label_types = {label.label_type for label in snapshot.visible_labels if label.label_type} if snapshot else set()
+        current_counts = (
+            _canonical_counts(snapshot.label_type_counts or count_label_types(snapshot.visible_labels))
+            if snapshot
+            else Counter()
+        )
+        current_label_types = set()
+        for label in (snapshot.visible_labels if snapshot else []):
+            label_type = canonical_label_type(label.label_type)
+            if label_type:
+                current_label_types.add(label_type)
+        current_sequence = _label_sequence(snapshot.visible_labels) if snapshot else []
         current_label_values = {
             normalize_text(label.value)
             for label in (snapshot.visible_labels if snapshot else [])
@@ -129,9 +185,11 @@ class SuggestionEngine:
             for source in candidate["sources"]:
                 source_score, source_reasons = self._score_source(
                     current_type=current_type,
+                    current_canonical_type=current_canonical_type,
                     current_region=current_region,
                     current_counts=current_counts,
                     current_label_types=current_label_types,
+                    current_sequence=current_sequence,
                     current_label_values=current_label_values,
                     current_neighbors=current_neighbors,
                     source=source,
@@ -141,8 +199,18 @@ class SuggestionEngine:
                     best_source = source
                     best_source_reasons = source_reasons
 
+            compatibility_score, compatibility_reasons = self._score_value_shape_support(
+                current_type=current_type,
+                current_input=query,
+                snapshot=snapshot,
+                candidate_text=candidate["text"],
+                best_source=best_source,
+            )
+
             score += best_source_score
+            score += compatibility_score
             reasons.extend(best_source_reasons)
+            reasons.extend(compatibility_reasons)
             score += min(candidate["accept_count"] * 2.5, 12.0)
             if candidate["accept_count"]:
                 reasons.append("frequently accepted")
@@ -224,21 +292,29 @@ class SuggestionEngine:
     def _score_source(
         self,
         current_type: str,
+        current_canonical_type: str,
         current_region: str,
         current_counts: Counter[str],
         current_label_types: set[str],
+        current_sequence: list[str],
         current_label_values: set[str],
         current_neighbors: set[str],
         source: dict[str, Any],
     ) -> tuple[float, list[str]]:
         score = 0.0
         reasons: list[str] = []
-        if current_type and source.get("source_label_type"):
-            if current_type == source["source_label_type"]:
-                score += 18.0
-                reasons.append("same target label type")
+        source_canonical_type = canonical_label_type(source.get("source_label_type", ""))
+        if current_canonical_type and source_canonical_type:
+            if current_canonical_type == source_canonical_type:
+                score += 22.0
+                reasons.append("same label key")
             else:
-                score -= 2.0
+                similarity = _label_similarity(current_type, source.get("source_label_type", ""))
+                if similarity >= 0.82:
+                    score += similarity * 10.0
+                    reasons.append("similar label text")
+                else:
+                    score -= 4.0
 
         if current_region and source.get("source_region"):
             if current_region == source["source_region"]:
@@ -246,7 +322,7 @@ class SuggestionEngine:
                 reasons.append("same target region")
 
         sample_snapshot = source.get("sample_snapshot") or {}
-        source_counts = Counter(sample_snapshot.get("label_type_counts") or {})
+        source_counts = _canonical_counts(sample_snapshot.get("label_type_counts") or {})
         if current_counts and source_counts:
             overlap = _overlap_ratio(current_counts, source_counts)
             if overlap > 0:
@@ -254,11 +330,11 @@ class SuggestionEngine:
                 reasons.append("similar label distribution")
 
         source_labels = sample_snapshot.get("visible_labels") or []
-        source_label_types = {
-            label.get("label_type", "")
-            for label in source_labels
-            if label.get("label_type")
-        }
+        source_label_types = set()
+        for label in source_labels:
+            label_type = canonical_label_type(label.get("label_type", ""))
+            if label_type:
+                source_label_types.add(label_type)
         if current_label_types and source_label_types:
             label_overlap = len(current_label_types & source_label_types) / max(
                 len(current_label_types | source_label_types), 1
@@ -266,6 +342,12 @@ class SuggestionEngine:
             if label_overlap > 0:
                 score += label_overlap * 10.0
                 reasons.append("overlapping label types")
+
+        source_sequence = _label_sequence(source_labels)
+        sequence_similarity = _sequence_similarity(current_sequence, source_sequence)
+        if sequence_similarity >= 0.72:
+            score += sequence_similarity * 12.0
+            reasons.append("similar task structure")
 
         source_values = {
             normalize_text(label.get("value", ""))
@@ -291,6 +373,54 @@ class SuggestionEngine:
             if sample_snapshot["page_identity"] == source["page_identity"]:
                 score += 4.0
                 reasons.append("same page identity")
+
+        return score, reasons
+
+    def _score_value_shape_support(
+        self,
+        current_type: str,
+        current_input: str,
+        snapshot: Optional[SampleSnapshotPayload],
+        candidate_text: str,
+        best_source: Optional[dict[str, Any]],
+    ) -> tuple[float, list[str]]:
+        candidate_kind = classify_value(candidate_text)
+        input_kind = classify_value(current_input)
+        score = 0.0
+        reasons: list[str] = []
+
+        if current_input and input_kind != "empty":
+            if candidate_kind == input_kind:
+                score += 6.0
+                reasons.append("same input shape")
+            elif same_value_family(candidate_kind, input_kind):
+                score += 3.0
+                reasons.append("same input family")
+            else:
+                score -= 6.0
+                reasons.append("different input shape")
+
+        current_label_key = canonical_label_type(current_type)
+        same_label_values = []
+        if current_label_key:
+            for label in (snapshot.visible_labels if snapshot else []):
+                if canonical_label_type(label.label_type) == current_label_key and label.value:
+                    same_label_values.append(label.value)
+        same_label_kinds = {classify_value(value) for value in same_label_values}
+        if same_label_kinds:
+            if candidate_kind in same_label_kinds:
+                score += 6.0
+                reasons.append("same label value shape")
+            elif value_family(candidate_kind) in {value_family(kind) for kind in same_label_kinds}:
+                score += 2.0
+                reasons.append("same label value family")
+            else:
+                score -= 5.0
+                reasons.append("different label value shape")
+
+        if best_source and _label_similarity(current_type, best_source.get("source_label_type", "")) >= 0.82:
+            score += 3.0
+            reasons.append("shape backed by similar label")
 
         return score, reasons
 
