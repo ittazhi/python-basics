@@ -86,7 +86,7 @@ Open the extension popup to verify the backend is online. The dashboard is avail
 - Long pages are handled incrementally. The extension does not need to scroll the page to the bottom before recommending.
 - Iframes are attempted through `all_frames` injection. Unreadable iframe regions are recorded in the snapshot instead of blocking recommendations.
 - Inline suggestions appear near the focused input. The side panel shows reasons and source evidence.
-- Candidates are never auto-filled. Click a candidate, press `Alt+1` through `Alt+5`, or press `Ctrl+Enter` after selecting with arrow keys.
+- Candidates are never auto-filled. Click a candidate, press `Option+1` through `Option+5`, or press `Option+Enter` after selecting with arrow keys.
 - Global fallback search opens with `Ctrl/Cmd+Shift+K`.
 
 ## Backend API
