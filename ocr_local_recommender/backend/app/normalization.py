@@ -11,6 +11,9 @@ from .models import LabelFact, SampleSnapshotPayload
 WHITESPACE_RE = re.compile(r"\s+")
 SEPARATOR_RE = re.compile(r"[-_/,:;|()（）\[\]{}<>【】、，。；：'\"`~!@#$%^&*+=?]+")
 DIGIT_RE = re.compile(r"\d+")
+DATE_LIKE_RE = re.compile(r"^\d{4}(?:\d{2}){0,2}$")
+CJK_RE = re.compile(r"[\u3400-\u9fff]")
+LATIN_RE = re.compile(r"[a-z]")
 
 
 def utc_now_iso() -> str:
@@ -29,6 +32,55 @@ def normalize_text(text: str) -> str:
     return normalized
 
 
+def canonical_label_type(label_type: str) -> str:
+    normalized = normalize_text(label_type)
+    return normalized[:80]
+
+
+def classify_value(text: str) -> str:
+    normalized = normalize_text(text)
+    if not normalized:
+        return "empty"
+    digits = "".join(DIGIT_RE.findall(normalized))
+    has_digit = any(char.isdigit() for char in normalized)
+    has_cjk = bool(CJK_RE.search(normalized))
+    has_latin = bool(LATIN_RE.search(normalized))
+
+    if digits == normalized:
+        if DATE_LIKE_RE.match(normalized) and len(normalized) in {6, 8}:
+            return "date_like"
+        if len(normalized) <= 4:
+            return "numeric_short"
+        if len(normalized) <= 10:
+            return "numeric_medium"
+        return "numeric_long"
+    if has_digit and (has_latin or has_cjk):
+        return "mixed_alphanumeric"
+    if has_digit:
+        return "mixed_numeric"
+    if has_cjk and not has_latin:
+        return "cjk_text_short" if len(normalized) <= 6 else "cjk_text_long"
+    if has_latin and not has_cjk:
+        return "latin_text_short" if len(normalized) <= 12 else "latin_text_long"
+    return "text"
+
+
+def same_value_family(left: str, right: str) -> bool:
+    left_family = value_family(left)
+    right_family = value_family(right)
+    return bool(left_family and left_family == right_family)
+
+
+def value_family(kind: str) -> str:
+    if kind.startswith("numeric_") or kind == "date_like":
+        return "numeric"
+    if kind.startswith("cjk_text") or kind.startswith("latin_text") or kind == "text":
+        return "text"
+    if kind.startswith("mixed_"):
+        return "mixed"
+    return kind
+
+
 def is_long_digit_like(text: str) -> bool:
     normalized = normalize_text(text)
     digits = "".join(DIGIT_RE.findall(normalized))
@@ -38,8 +90,9 @@ def is_long_digit_like(text: str) -> bool:
 def count_label_types(labels: Iterable[LabelFact]) -> dict[str, int]:
     counter: Counter[str] = Counter()
     for label in labels:
-        if label.label_type:
-            counter[label.label_type] += 1
+        label_type = canonical_label_type(label.label_type)
+        if label_type:
+            counter[label_type] += 1
     return dict(counter)
 
 
@@ -67,6 +120,9 @@ def build_context_terms(snapshot: SampleSnapshotPayload | None) -> list[str]:
                 normalized = normalize_text(value)
                 if normalized:
                     terms.append(normalized)
+        canonical_type = canonical_label_type(label.label_type)
+        if canonical_type:
+            terms.append(canonical_type)
         if label.value:
             clean = simplify_display_text(label.value)
             terms.append(clean)
