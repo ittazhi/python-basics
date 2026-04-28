@@ -46,6 +46,27 @@ def make_generic_snapshot(
     )
 
 
+def make_position_snapshot(
+    target_label_type: str,
+    first_label: str,
+    second_label: str,
+    first_value: str,
+    second_value: str,
+) -> SampleSnapshotPayload:
+    return SampleSnapshotPayload(
+        site_id="sample-ocr",
+        page_identity="position-task",
+        target_label_type=target_label_type,
+        target_region="main",
+        current_input="",
+        visible_labels=[
+            LabelFact(label_type=first_label, value=first_value, region="main", order=1),
+            LabelFact(label_type=second_label, value=second_value, region="main", order=2),
+        ],
+        neighbor_texts=["Generic OCR task", first_label, second_label],
+    )
+
+
 class StorageAndRankingTests(unittest.TestCase):
     def setUp(self):
         self.tmpdir = tempfile.TemporaryDirectory()
@@ -86,6 +107,29 @@ class StorageAndRankingTests(unittest.TestCase):
         self.assertTrue(results)
         self.assertEqual(results[0]["text"], "No. 1 Sample Road")
 
+    def test_multiline_display_text_is_preserved(self):
+        captured = self.storage.capture_value_commit("第一行\n第二行", make_generic_snapshot())
+        self.assertEqual(captured["text"], "第一行\n第二行")
+
+    def test_text_query_allows_loose_character_overlap(self):
+        self.storage.capture_value_commit("北京朝阳区样本路", make_generic_snapshot(target_label_type="Field 01"))
+
+        suggestions = self.engine.suggest(
+            SuggestionRequest(sample_snapshot=make_generic_snapshot(current_input="北京朝羊区样路", target_label_type="Field 01"), limit=3)
+        )
+
+        self.assertTrue(suggestions)
+        self.assertEqual(suggestions[0]["text"], "北京朝阳区样本路")
+
+    def test_long_digit_query_stays_conservative(self):
+        self.storage.capture_value_commit("123456789012", make_generic_snapshot(target_label_type="Field 01"))
+
+        suggestions = self.engine.suggest(
+            SuggestionRequest(sample_snapshot=make_generic_snapshot(current_input="123456789013", target_label_type="Field 01"), limit=3)
+        )
+
+        self.assertFalse(suggestions)
+
     def test_label_keys_match_after_separator_normalization(self):
         self.storage.capture_value_commit("ABC-123", make_generic_snapshot(target_label_type="Field 01"))
 
@@ -105,6 +149,27 @@ class StorageAndRankingTests(unittest.TestCase):
 
         self.assertTrue(suggestions)
         self.assertEqual(suggestions[0]["text"], "Sample Text")
+
+    def test_empty_input_can_use_field_position_without_domain_rules(self):
+        self.storage.capture_value_commit(
+            "OLD-A",
+            make_position_snapshot("Old A", "Old A", "Old B", "OLD-A", "OLD-B"),
+        )
+        self.storage.capture_value_commit(
+            "OLD-B",
+            make_position_snapshot("Old B", "Old A", "Old B", "OLD-A", "OLD-B"),
+        )
+
+        suggestions = self.engine.suggest(
+            SuggestionRequest(
+                sample_snapshot=make_position_snapshot("Current B", "Current A", "Current B", "", ""),
+                limit=3,
+            )
+        )
+
+        self.assertTrue(suggestions)
+        self.assertEqual(suggestions[0]["text"], "OLD-B")
+        self.assertIn("similar field position", suggestions[0]["reasons"])
 
 
 if __name__ == "__main__":

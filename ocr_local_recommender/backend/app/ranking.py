@@ -79,6 +79,60 @@ def _label_similarity(left: str, right: str) -> float:
     return SequenceMatcher(None, left_normalized, right_normalized).ratio()
 
 
+def _field_count_similarity(left: list[str], right: list[str]) -> float:
+    if not left or not right:
+        return 0.0
+    smaller = min(len(left), len(right))
+    larger = max(len(left), len(right))
+    if larger == 0:
+        return 0.0
+    return smaller / larger
+
+
+def _field_position_similarity(
+    current_type: str,
+    current_sequence: list[str],
+    source_type: str,
+    source_sequence: list[str],
+) -> float:
+    if len(current_sequence) < 2 or len(source_sequence) < 2:
+        return 0.0
+    current_key = canonical_label_type(current_type)
+    source_key = canonical_label_type(source_type)
+    if not current_key or not source_key:
+        return 0.0
+    if current_key not in current_sequence or source_key not in source_sequence:
+        return 0.0
+    current_index = current_sequence.index(current_key)
+    source_index = source_sequence.index(source_key)
+    current_ratio = current_index / max(len(current_sequence) - 1, 1)
+    source_ratio = source_index / max(len(source_sequence) - 1, 1)
+    return max(0.0, 1.0 - abs(current_ratio - source_ratio))
+
+
+def _char_coverage(query: str, candidate: str) -> float:
+    if not query or not candidate:
+        return 0.0
+    query_counts = Counter(query)
+    candidate_counts = Counter(candidate)
+    matched = sum(min(count, candidate_counts.get(char, 0)) for char, count in query_counts.items())
+    return matched / max(len(query), 1)
+
+
+def _best_window_similarity(query: str, candidate: str) -> float:
+    if not query or not candidate:
+        return 0.0
+    if len(candidate) <= len(query):
+        return SequenceMatcher(None, query, candidate).ratio()
+    window_size = min(len(candidate), max(len(query) + 2, 4))
+    best = 0.0
+    for start in range(0, len(candidate) - window_size + 1):
+        ratio = SequenceMatcher(None, query, candidate[start : start + window_size]).ratio()
+        if ratio > best:
+            best = ratio
+    return best
+
+
 def _bounded_edit_distance(left: str, right: str, limit: int = 1) -> int:
     if abs(len(left) - len(right)) > limit:
         return limit + 1
@@ -174,6 +228,8 @@ class SuggestionEngine:
             if normalized_query:
                 score += input_score
                 reasons.extend(input_reasons)
+                if is_long_digit_like(query) and is_long_digit_like(candidate["text"]) and input_score <= 0:
+                    continue
                 if input_score <= 0 and candidate["tier"] == "weak":
                     continue
             elif candidate["tier"] != "strong" and not search_mode:
@@ -226,7 +282,7 @@ class SuggestionEngine:
                 elif age_days <= 14:
                     score += 2.0
 
-            if not normalized_query and best_source_score < 18.0 and not search_mode:
+            if not normalized_query and best_source_score < self._empty_input_context_threshold(current_sequence) and not search_mode:
                 continue
             if normalized_query and input_score < 6.0 and best_source_score < 14.0 and not search_mode:
                 continue
@@ -282,10 +338,18 @@ class SuggestionEngine:
                 score += 8.0 if not search_mode else 10.0
                 reasons.append("light typo tolerance")
             else:
-                ratio = SequenceMatcher(None, query, candidate_text[: max(len(query), 1)]).ratio()
-                if ratio >= 0.78 and search_mode:
-                    score += 7.0
-                    reasons.append("fuzzy recall")
+                ratio = _best_window_similarity(query, candidate_text)
+                if ratio >= 0.78:
+                    score += 9.0 if search_mode else 7.0
+                    reasons.append("near text match")
+
+            coverage = _char_coverage(query, candidate_text)
+            if coverage >= 0.86 and len(query) >= 4:
+                score += 8.0 if search_mode else 5.0
+                reasons.append("character overlap")
+            elif coverage >= 0.72 and search_mode and len(query) >= 4:
+                score += 4.0
+                reasons.append("loose character overlap")
 
         return score, reasons
 
@@ -344,10 +408,25 @@ class SuggestionEngine:
                 reasons.append("overlapping label types")
 
         source_sequence = _label_sequence(source_labels)
+        count_similarity = _field_count_similarity(current_sequence, source_sequence)
+        if count_similarity >= 0.8:
+            score += count_similarity * 4.0
+            reasons.append("similar field count")
+
         sequence_similarity = _sequence_similarity(current_sequence, source_sequence)
         if sequence_similarity >= 0.72:
             score += sequence_similarity * 12.0
             reasons.append("similar task structure")
+
+        position_similarity = _field_position_similarity(
+            current_type=current_type,
+            current_sequence=current_sequence,
+            source_type=source.get("source_label_type", ""),
+            source_sequence=source_sequence,
+        )
+        if position_similarity >= 0.8:
+            score += position_similarity * 12.0
+            reasons.append("similar field position")
 
         source_values = {
             normalize_text(label.get("value", ""))
@@ -375,6 +454,11 @@ class SuggestionEngine:
                 reasons.append("same page identity")
 
         return score, reasons
+
+    def _empty_input_context_threshold(self, current_sequence: list[str]) -> float:
+        if len(current_sequence) >= 2:
+            return 12.0
+        return 18.0
 
     def _score_value_shape_support(
         self,

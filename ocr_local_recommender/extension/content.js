@@ -502,7 +502,7 @@
     if (!state.activeTarget || !document.contains(state.activeTarget)) {
       return;
     }
-    const value = cleanText(readEditableValue(state.activeTarget));
+    const value = cleanDisplayText(readEditableValue(state.activeTarget));
     if (!value) {
       return;
     }
@@ -531,7 +531,7 @@
     ) {
       return;
     }
-    const currentValue = cleanText(readEditableValue(target));
+    const currentValue = cleanDisplayText(readEditableValue(target));
     if (!currentValue || currentValue === state.acceptedCandidate.text) {
       return;
     }
@@ -732,7 +732,7 @@
       labels.push({
         label_type: active.labelType,
         attr: active.attr,
-        value: cleanText(readEditableValue(editable)),
+        value: cleanDisplayText(readEditableValue(editable)),
         region: active.region,
         order: index
       });
@@ -746,7 +746,7 @@
     const labelType = readContainerLabelType(container, valueEditable);
     const attr = readContainerAttribute(container);
     const region = findRegion(container);
-    const value = cleanText(valueEditable ? readEditableValue(valueEditable) : readContainerValue(container));
+    const value = cleanDisplayText(valueEditable ? readEditableValue(valueEditable) : readContainerValue(container));
 
     if (!labelType && !value && !attr) {
       return null;
@@ -776,7 +776,7 @@
       labelType: readContainerLabelType(container, target) || findAssociatedLabelText(target),
       attr: readContainerAttribute(container) || "",
       region: findRegion(container || target),
-      currentInput: cleanText(readEditableValue(target))
+      currentInput: cleanDisplayText(readEditableValue(target))
     };
   }
 
@@ -1343,6 +1343,15 @@
     return String(text || "")
       .normalize("NFKC")
       .replace(/\s+/g, " ")
+      .trim();
+  }
+
+  function cleanDisplayText(text) {
+    return String(text || "")
+      .replace(/\r\n/g, "\n")
+      .replace(/\r/g, "\n")
+      .replace(/[ \t\f\v]+/g, " ")
+      .replace(/ *\n */g, "\n")
       .trim();
   }
 

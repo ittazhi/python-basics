@@ -21,8 +21,10 @@ def utc_now_iso() -> str:
 
 
 def simplify_display_text(text: str) -> str:
-    collapsed = WHITESPACE_RE.sub(" ", unicodedata.normalize("NFKC", str(text or "")).strip())
-    return collapsed[:400]
+    cleaned = str(text or "").replace("\r\n", "\n").replace("\r", "\n")
+    cleaned = re.sub(r"[ \t\f\v]+", " ", cleaned)
+    cleaned = re.sub(r" *\n *", "\n", cleaned).strip()
+    return cleaned[:400]
 
 
 def normalize_text(text: str) -> str:
