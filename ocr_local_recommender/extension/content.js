@@ -1,6 +1,8 @@
 (function () {
   const GLOBAL_FLAG = "__ocrLocalRecommenderLoaded";
   const UI_POSITION_KEY = "ocrLocalRecommenderUiPositions";
+  const UI_ROOT_ID = "ocr-local-recommender-root";
+  const VIEWPORT_THROTTLE_MS = 120;
   if (window[GLOBAL_FLAG]) {
     return;
   }
@@ -56,24 +58,28 @@
     },
     drag: null,
     ui: null,
-    observer: null
+    observer: null,
+    viewportRafToken: 0,
+    contextLost: false
   };
 
-  chrome.runtime.onMessage.addListener((message) => {
-    if (message?.type !== "ocr-assist:config-changed") {
+  if (chrome?.runtime?.onMessage) {
+    chrome.runtime.onMessage.addListener((message) => {
+      if (message?.type !== "ocr-assist:config-changed") {
+        return false;
+      }
+      state.config = {
+        ...state.config,
+        ...(message.config || {})
+      };
+      if (!state.config.enabled) {
+        hideAllUi();
+      } else if (state.isTopFrame && state.activeTarget) {
+        scheduleSuggest("config", 10);
+      }
       return false;
-    }
-    state.config = {
-      ...state.config,
-      ...(message.config || {})
-    };
-    if (!state.config.enabled) {
-      hideAllUi();
-    } else if (state.isTopFrame && state.activeTarget) {
-      scheduleSuggest("config", 10);
-    }
-    return false;
-  });
+    });
+  }
 
   void init();
 
@@ -114,8 +120,11 @@
   }
 
   function observeDom() {
-    state.observer = new MutationObserver(() => {
+    state.observer = new MutationObserver((mutations) => {
       if (!state.config.enabled) {
+        return;
+      }
+      if (!hasRelevantMutation(mutations)) {
         return;
       }
       if (state.isTopFrame) {
@@ -131,6 +140,24 @@
         characterData: true
       });
     }
+  }
+
+  function hasRelevantMutation(mutations) {
+    for (const mutation of mutations) {
+      const target = mutation.target;
+      if (target instanceof Node && isWithinUiRoot(target)) {
+        continue;
+      }
+      return true;
+    }
+    return false;
+  }
+
+  function isWithinUiRoot(node) {
+    if (!state.ui || !state.ui.root) {
+      return false;
+    }
+    return state.ui.root === node || state.ui.root.contains(node);
   }
 
   function createUi() {
@@ -284,13 +311,19 @@
     if (!state.config.enabled) {
       return;
     }
-    if (state.isTopFrame) {
-      positionPopover();
-      applyPanelPosition("sidebar");
-      scheduleSnapshotCapture("viewport", 420);
-    } else {
-      scheduleFramePublish("viewport", 420);
+    if (state.viewportRafToken) {
+      return;
     }
+    state.viewportRafToken = window.requestAnimationFrame(() => {
+      state.viewportRafToken = 0;
+      if (state.isTopFrame) {
+        positionPopover();
+        applyPanelPosition("sidebar");
+        scheduleSnapshotCapture("viewport", 420);
+      } else {
+        scheduleFramePublish("viewport", 420);
+      }
+    });
   }
 
   function handleNavigation() {
@@ -322,12 +355,17 @@
 
     if (!state.ui || state.ui.modal.dataset.visible === "true") {
       if (event.key === "Escape") {
+        event.preventDefault();
         closeSearchModal();
       }
       return;
     }
 
-    if (!state.suggestions.length || !state.ui.popover.dataset.visible || state.ui.popover.dataset.visible !== "true") {
+    if (event.target instanceof Node && isWithinUiRoot(event.target)) {
+      return;
+    }
+
+    if (!state.suggestions.length || state.ui.popover.dataset.visible !== "true") {
       return;
     }
 
@@ -598,6 +636,13 @@
       return;
     }
     state.ui.modal.dataset.visible = "false";
+    if (state.activeTarget && document.contains(state.activeTarget)) {
+      try {
+        state.activeTarget.focus({ preventScroll: true });
+      } catch (error) {
+        // focus restoration is best-effort
+      }
+    }
   }
 
   async function runSearch(query) {
@@ -1281,6 +1326,9 @@
     if (!node.matches(EDITABLE_SELECTOR)) {
       return false;
     }
+    if (isWithinUiRoot(node)) {
+      return false;
+    }
     if (!isVisible(node)) {
       return false;
     }
@@ -1425,14 +1473,41 @@
   }
 
   async function sendMessage(message) {
+    if (state.contextLost) {
+      return { ok: false, error: "Extension context unavailable." };
+    }
+    if (!chrome?.runtime?.id) {
+      handleContextLost();
+      return { ok: false, error: "Extension context unavailable." };
+    }
     try {
       return await chrome.runtime.sendMessage(message);
     } catch (error) {
-      return {
-        ok: false,
-        error: error instanceof Error ? error.message : String(error)
-      };
+      const text = error instanceof Error ? error.message : String(error);
+      if (
+        text.includes("Extension context invalidated") ||
+        text.includes("context invalidated")
+      ) {
+        handleContextLost();
+      }
+      return { ok: false, error: text };
     }
+  }
+
+  function handleContextLost() {
+    if (state.contextLost) {
+      return;
+    }
+    state.contextLost = true;
+    state.config.enabled = false;
+    if (state.observer) {
+      try {
+        state.observer.disconnect();
+      } catch (error) {
+        // observer may already be disconnected
+      }
+    }
+    hideAllUi();
   }
 
   function installHistoryHooks() {

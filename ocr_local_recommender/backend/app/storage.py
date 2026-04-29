@@ -27,6 +27,15 @@ def _json_load(text: str | None, default: Any) -> Any:
     return json.loads(text)
 
 
+def _escape_like(value: str) -> str:
+    """Escape SQLite LIKE wildcards so user input is matched literally."""
+    return (
+        value.replace("\\", "\\\\")
+        .replace("%", "\\%")
+        .replace("_", "\\_")
+    )
+
+
 class Storage:
     def __init__(self, data_dir: Path) -> None:
         self.data_dir = data_dir
@@ -466,7 +475,7 @@ class Storage:
                   cs.last_shown_at,
                   cs.last_used_at
                 FROM candidate_value cv
-                JOIN candidate_stats cs ON cs.candidate_id = cv.id
+                LEFT JOIN candidate_stats cs ON cs.candidate_id = cv.id
                 WHERE cv.id = ?
                 """,
                 (candidate_id,),
@@ -482,10 +491,10 @@ class Storage:
                 "first_seen_at": row["first_seen_at"],
                 "last_seen_at": row["last_seen_at"],
                 "repeat_count": int(row["repeat_count"]),
-                "source_count": int(row["source_count"]),
-                "accept_count": int(row["accept_count"]),
-                "dismiss_count": int(row["dismiss_count"]),
-                "edit_after_accept_count": int(row["edit_after_accept_count"]),
+                "source_count": int(row["source_count"] or 0),
+                "accept_count": int(row["accept_count"] or 0),
+                "dismiss_count": int(row["dismiss_count"] or 0),
+                "edit_after_accept_count": int(row["edit_after_accept_count"] or 0),
                 "blacklisted": bool(row["blacklisted"]),
                 "last_shown_at": row["last_shown_at"] or "",
                 "last_used_at": row["last_used_at"] or "",
@@ -504,6 +513,7 @@ class Storage:
         include_weak: bool = True,
         query: str = "",
         include_blacklisted: bool = False,
+        limit: Optional[int] = None,
     ) -> list[dict[str, Any]]:
         with self._lock:
             params: list[Any] = []
@@ -514,9 +524,21 @@ class Storage:
                 clauses.append("cv.tier = 'strong'")
             normalized_query = normalize_text(query)
             if normalized_query:
-                clauses.append("(cv.normalized_text LIKE ? OR cv.display_text LIKE ?)")
-                params.extend([f"%{normalized_query}%", f"%{query.strip()}%"])
+                clauses.append(
+                    "(cv.normalized_text LIKE ? ESCAPE '\\' OR cv.display_text LIKE ? ESCAPE '\\')"
+                )
+                params.extend(
+                    [
+                        f"%{_escape_like(normalized_query)}%",
+                        f"%{_escape_like(query.strip())}%",
+                    ]
+                )
             where_clause = "WHERE " + " AND ".join(clauses) if clauses else ""
+
+            limit_clause = ""
+            if isinstance(limit, int) and limit > 0:
+                limit_clause = "LIMIT ?"
+                params.append(int(limit))
 
             rows = self.memory_conn.execute(
                 f"""
@@ -536,9 +558,10 @@ class Storage:
                   cs.last_shown_at,
                   cs.last_used_at
                 FROM candidate_value cv
-                JOIN candidate_stats cs ON cs.candidate_id = cv.id
+                LEFT JOIN candidate_stats cs ON cs.candidate_id = cv.id
                 {where_clause}
-                ORDER BY cs.accept_count DESC, cv.last_seen_at DESC
+                ORDER BY COALESCE(cs.accept_count, 0) DESC, cv.last_seen_at DESC
+                {limit_clause}
                 """,
                 tuple(params),
             ).fetchall()
@@ -557,10 +580,10 @@ class Storage:
                         "first_seen_at": row["first_seen_at"],
                         "last_seen_at": row["last_seen_at"],
                         "repeat_count": int(row["repeat_count"]),
-                        "source_count": int(row["source_count"]),
-                        "accept_count": int(row["accept_count"]),
-                        "dismiss_count": int(row["dismiss_count"]),
-                        "edit_after_accept_count": int(row["edit_after_accept_count"]),
+                        "source_count": int(row["source_count"] or 0),
+                        "accept_count": int(row["accept_count"] or 0),
+                        "dismiss_count": int(row["dismiss_count"] or 0),
+                        "edit_after_accept_count": int(row["edit_after_accept_count"] or 0),
                         "blacklisted": bool(row["blacklisted"]),
                         "last_shown_at": row["last_shown_at"] or "",
                         "last_used_at": row["last_used_at"] or "",
@@ -577,7 +600,13 @@ class Storage:
             return bundles
 
     def list_entries(self, query: str = "", limit: int = 100) -> list[dict[str, Any]]:
-        return self.fetch_candidate_bundles(include_weak=True, query=query, include_blacklisted=True)[:limit]
+        safe_limit = max(1, min(int(limit), 1000)) if isinstance(limit, int) else 100
+        return self.fetch_candidate_bundles(
+            include_weak=True,
+            query=query,
+            include_blacklisted=True,
+            limit=safe_limit,
+        )
 
     def list_logs(self, limit: int = 200) -> list[dict[str, Any]]:
         with self._lock:

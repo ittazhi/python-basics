@@ -19,7 +19,9 @@ from .models import (
 from .ranking import SuggestionEngine
 from .storage import Storage
 
-DATA_DIR = Path(os.getenv("OCR_RECOMMENDER_DATA_DIR", Path(__file__).resolve().parents[1] / "data"))
+_DEFAULT_DATA_DIR = Path(__file__).resolve().parents[1] / "data"
+_data_dir_env = os.getenv("OCR_RECOMMENDER_DATA_DIR", "").strip()
+DATA_DIR = Path(_data_dir_env) if _data_dir_env else _DEFAULT_DATA_DIR
 storage = Storage(DATA_DIR)
 engine = SuggestionEngine(storage)
 clipboard_watcher = ClipboardWatcher(storage)
