@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import platform
 import shutil
 import subprocess
@@ -7,6 +8,8 @@ import threading
 from typing import Optional
 
 from .storage import Storage
+
+logger = logging.getLogger(__name__)
 
 
 class ClipboardWatcher:
@@ -28,17 +31,29 @@ class ClipboardWatcher:
 
     def stop(self) -> None:
         self._stop.set()
-        if self._thread is not None:
-            self._thread.join(timeout=1.5)
+        thread = self._thread
+        if thread is not None:
+            thread.join(timeout=max(self.poll_interval * 4, 3.0))
             self._thread = None
 
     def _run(self) -> None:
         while not self._stop.wait(self.poll_interval):
-            text = self._read_clipboard()
+            try:
+                text = self._read_clipboard()
+            except Exception:
+                logger.exception("Clipboard read failed")
+                continue
             if not text or text == self._last_text:
                 continue
             self._last_text = text
-            self.storage.capture_clipboard(text=text, sample_snapshot=None, metadata={"source": "clipboard_watcher"})
+            try:
+                self.storage.capture_clipboard(
+                    text=text,
+                    sample_snapshot=None,
+                    metadata={"source": "clipboard_watcher"},
+                )
+            except Exception:
+                logger.exception("Failed to persist clipboard candidate")
 
     def _read_clipboard(self) -> str:
         try:
@@ -46,11 +61,23 @@ class ClipboardWatcher:
                 ["pbpaste"],
                 check=False,
                 capture_output=True,
-                text=True,
                 timeout=1.0,
             )
         except (OSError, subprocess.SubprocessError):
             return ""
         if result.returncode != 0:
             return ""
-        return result.stdout.strip()
+        return self._decode_clipboard_bytes(result.stdout).strip()
+
+    @staticmethod
+    def _decode_clipboard_bytes(data: bytes) -> str:
+        if not data:
+            return ""
+        for encoding in ("utf-8", "utf-16"):
+            try:
+                return data.decode(encoding)
+            except UnicodeDecodeError:
+                continue
+        # Fall back to a permissive decode so that the watcher never crashes on
+        # exotic clipboard payloads; non-decodable bytes are dropped.
+        return data.decode("utf-8", errors="replace")
