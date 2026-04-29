@@ -150,6 +150,31 @@ class StorageAndRankingTests(unittest.TestCase):
         self.assertTrue(suggestions)
         self.assertEqual(suggestions[0]["text"], "Sample Text")
 
+    def test_blank_text_is_not_persisted(self):
+        result = self.storage.capture_value_commit("   \n  ", make_snapshot())
+        self.assertIsNone(result["candidate_id"])
+
+        entries = self.storage.list_entries()
+        self.assertEqual(entries, [])
+
+    def test_like_wildcards_in_query_are_matched_literally(self):
+        self.storage.capture_value_commit("AB_X", make_generic_snapshot())
+        self.storage.capture_value_commit("ABcX", make_generic_snapshot())
+
+        # The display-text LIKE branch must not treat "_" as a single-character
+        # wildcard, otherwise "ABcX" would also be returned for a "AB_X" query.
+        results = self.storage.list_entries(query="AB_X")
+        texts = [entry["text"] for entry in results]
+        self.assertIn("AB_X", texts)
+        self.assertNotIn("ABcX", texts)
+
+    def test_list_entries_respects_limit(self):
+        for index in range(5):
+            self.storage.capture_value_commit(f"value-{index}", make_generic_snapshot())
+
+        entries = self.storage.list_entries(limit=2)
+        self.assertEqual(len(entries), 2)
+
     def test_empty_input_can_use_field_position_without_domain_rules(self):
         self.storage.capture_value_commit(
             "OLD-A",
