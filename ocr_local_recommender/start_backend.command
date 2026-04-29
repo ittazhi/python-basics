@@ -30,7 +30,7 @@ fi
 
 if ! "$PYTHON_BIN" -c "import fastapi, uvicorn" >/dev/null 2>&1; then
   echo "Installing backend dependencies..."
-  "$PYTHON_BIN" -m pip install --upgrade pip || true
+  "$PYTHON_BIN" -m pip install --upgrade pip setuptools wheel || true
   if ! "$PYTHON_BIN" -m pip install -r "$REQUIREMENTS_FILE"; then
     echo "Retrying dependency install with trusted PyPI hosts..."
     "$PYTHON_BIN" -m pip install \
