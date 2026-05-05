@@ -834,7 +834,7 @@ export function App() {
             <input value={findText} onChange={(event) => setFindText(event.target.value)} placeholder="查找" />
             <input value={replaceText} onChange={(event) => setReplaceText(event.target.value)} placeholder="替换" />
             <button type="button" onClick={applyBatchReplace}>替换</button>
-            <button type="button" onClick={applyBatchTrim}>Trim</button>
+            <button type="button" title="清理选中单元格内容开头和结尾的空格、换行、Tab" onClick={applyBatchTrim}>去首尾空白</button>
           </details>
         </div>
         <textarea
