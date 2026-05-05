@@ -1,0 +1,269 @@
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  color: #111;
+  background: #fff;
+  font-family: Arial, "Microsoft YaHei", sans-serif;
+  font-size: 12px;
+}
+
+button,
+input,
+textarea {
+  font: inherit;
+}
+
+button {
+  height: 24px;
+  padding: 0 7px;
+  color: #111;
+  background: #f8f8f8;
+  border: 1px solid #c9c9c9;
+  border-radius: 2px;
+  cursor: default;
+}
+
+button:hover:not(:disabled) {
+  background: #ededed;
+}
+
+button:active:not(:disabled) {
+  background: #e1e1e1;
+}
+
+button:disabled {
+  color: #999;
+  background: #f5f5f5;
+}
+
+.app {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
+
+.toolbar {
+  display: flex;
+  flex: 0 0 31px;
+  align-items: center;
+  gap: 3px;
+  min-width: 0;
+  padding: 3px 4px;
+  overflow-x: auto;
+  white-space: nowrap;
+  border-bottom: 1px solid #cfcfcf;
+  background: #fff;
+}
+
+.split {
+  flex: 0 0 1px;
+  width: 1px;
+  height: 18px;
+  margin: 0 3px;
+  background: #d8d8d8;
+}
+
+.status {
+  margin-left: auto;
+  padding: 0 5px;
+  color: #555;
+}
+
+.table-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  outline: none;
+  background: #fff;
+}
+
+.editable-table {
+  border-collapse: collapse;
+  table-layout: fixed;
+  width: max-content;
+  min-width: 0;
+  font-size: 12px;
+  line-height: 1.25;
+}
+
+.editable-table col {
+  width: 82px;
+}
+
+.editable-table th,
+.editable-table td {
+  position: relative;
+  width: 82px;
+  min-width: 82px;
+  height: 23px;
+  max-width: 260px;
+  padding: 2px 4px;
+  overflow: hidden;
+  color: #111;
+  text-align: left;
+  vertical-align: top;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  border: 1px solid #d9d9d9;
+  background: #fff;
+}
+
+.editable-table th {
+  font-weight: 600;
+  background: #f4f4f4;
+}
+
+.editable-table .table-cell.is-selected {
+  background: #e9f1ff;
+}
+
+.editable-table .table-cell.is-active {
+  z-index: 1;
+  outline: 2px solid #1a73e8;
+  outline-offset: -2px;
+}
+
+.editable-table .table-cell.is-editing {
+  padding: 0;
+  background: #fff;
+}
+
+.cell-content {
+  display: block;
+  min-height: 17px;
+}
+
+.cell-editor {
+  display: block;
+  width: 100%;
+  min-width: 82px;
+  height: 100%;
+  min-height: 23px;
+  margin: 0;
+  padding: 2px 4px;
+  color: #111;
+  background: #fff;
+  border: 0;
+  outline: 2px solid #1a73e8;
+  outline-offset: -2px;
+  resize: none;
+  overflow: hidden;
+  white-space: pre-wrap;
+}
+
+.context-menu {
+  position: fixed;
+  z-index: 20;
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 1px;
+  min-width: 150px;
+  padding: 3px;
+  background: #fff;
+  border: 1px solid #bdbdbd;
+  box-shadow: 0 2px 8px rgb(0 0 0 / 14%);
+}
+
+.context-menu button {
+  justify-content: flex-start;
+  width: 100%;
+  height: 23px;
+  text-align: left;
+  background: #fff;
+  border: 0;
+}
+
+.context-menu button:hover {
+  background: #e9f1ff;
+}
+
+.context-menu span {
+  display: block;
+  height: 1px;
+  margin: 2px 0;
+  background: #e2e2e2;
+}
+
+.source-panel {
+  position: fixed;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 10;
+  display: none;
+  height: 42vh;
+  min-height: 220px;
+  background: #fff;
+  border-top: 1px solid #bdbdbd;
+}
+
+.source-panel.is-open {
+  display: flex;
+  flex-direction: column;
+}
+
+.source-toolbar {
+  display: flex;
+  flex: 0 0 31px;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 4px;
+  border-bottom: 1px solid #d7d7d7;
+}
+
+.source-textarea {
+  flex: 1 1 auto;
+  width: 100%;
+  min-height: 0;
+  padding: 7px;
+  color: #111;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.45;
+  border: 0;
+  outline: none;
+  resize: none;
+}
+
+.batch-tools {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.batch-tools summary {
+  height: 24px;
+  padding: 4px 7px;
+  list-style: none;
+  border: 1px solid #c9c9c9;
+  border-radius: 2px;
+  background: #f8f8f8;
+}
+
+.batch-tools summary::-webkit-details-marker {
+  display: none;
+}
+
+.batch-tools[open] {
+  display: inline-flex;
+}
+
+.batch-tools input {
+  width: 120px;
+  height: 24px;
+  padding: 2px 5px;
+  border: 1px solid #c9c9c9;
+  outline: none;
+}

@@ -1,0 +1,21 @@
+{
+  "name": "react-table-editor",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node scripts/dev.mjs",
+    "build": "tsc && node scripts/build.mjs",
+    "setup": "node scripts/setup.mjs"
+  },
+  "dependencies": {
+    "react": "^19.1.1",
+    "react-dom": "^19.1.1"
+  },
+  "devDependencies": {
+    "@types/react": "^19.1.12",
+    "@types/react-dom": "^19.1.9",
+    "esbuild": "^0.28.0",
+    "typescript": "^5.9.3"
+  }
+}
