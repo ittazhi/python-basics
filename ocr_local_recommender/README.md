@@ -72,10 +72,10 @@ OCR_RECOMMENDER_DATA_DIR="/path/to/data" "../.venv/bin/python" -m uvicorn app.ma
 /path/to/ocr_local_recommender/extension
 ```
 
-If the folder is currently on the Desktop, select:
+If the folder is currently on the Desktop, select the `extension/` folder inside it, for example:
 
 ```text
-/Users/max/Desktop/ocr_local_recommender/extension
+~/Desktop/ocr_local_recommender/extension
 ```
 
 Open the extension popup to verify the backend is online. The dashboard is available from the popup.

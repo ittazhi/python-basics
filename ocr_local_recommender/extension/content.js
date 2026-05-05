@@ -1,8 +1,6 @@
 (function () {
   const GLOBAL_FLAG = "__ocrLocalRecommenderLoaded";
   const UI_POSITION_KEY = "ocrLocalRecommenderUiPositions";
-  const UI_ROOT_ID = "ocr-local-recommender-root";
-  const VIEWPORT_THROTTLE_MS = 120;
   if (window[GLOBAL_FLAG]) {
     return;
   }
@@ -58,28 +56,34 @@
     },
     drag: null,
     ui: null,
-    observer: null,
-    viewportRafToken: 0,
-    contextLost: false
+    observer: null
   };
 
-  if (chrome?.runtime?.onMessage) {
-    chrome.runtime.onMessage.addListener((message) => {
-      if (message?.type !== "ocr-assist:config-changed") {
-        return false;
-      }
-      state.config = {
-        ...state.config,
-        ...(message.config || {})
-      };
-      if (!state.config.enabled) {
-        hideAllUi();
-      } else if (state.isTopFrame && state.activeTarget) {
-        scheduleSuggest("config", 10);
-      }
+  const SNAPSHOT_LIMITS = {
+    containers: 80,
+    editables: 80,
+    neighborElements: 50,
+    labels: 160,
+    frames: 20
+  };
+
+  chrome.runtime.onMessage.addListener((message) => {
+    if (message?.type !== "ocr-assist:config-changed") {
       return false;
-    });
-  }
+    }
+    state.config = {
+      ...state.config,
+      ...(message.config || {})
+    };
+    if (!state.config.enabled) {
+      hideAllUi();
+      disconnectDomObserver();
+    } else if (state.isTopFrame && state.activeTarget) {
+      ensureDomObserver();
+      scheduleSuggest("config", 10);
+    }
+    return false;
+  });
 
   void init();
 
@@ -95,15 +99,13 @@
 
     installHistoryHooks();
     bindCommonEvents();
-    observeDom();
 
     if (state.isTopFrame) {
       createUi();
       await loadUiPositions();
       applyPanelPosition("sidebar");
-      scheduleSnapshotCapture("init", 60);
     } else {
-      scheduleFramePublish("init", 120);
+      scheduleFramePublish("init", 600);
     }
   }
 
@@ -119,45 +121,51 @@
     window.addEventListener("popstate", handleNavigation, true);
   }
 
-  function observeDom() {
-    state.observer = new MutationObserver((mutations) => {
+  function ensureDomObserver() {
+    if (state.observer) {
+      return;
+    }
+    state.observer = new MutationObserver((records) => {
       if (!state.config.enabled) {
         return;
       }
-      if (!hasRelevantMutation(mutations)) {
+      if (records.every(isInternalMutation)) {
         return;
       }
       if (state.isTopFrame) {
-        scheduleSnapshotCapture("mutation", 350);
+        if (state.activeTarget && document.contains(state.activeTarget)) {
+          scheduleSnapshotCapture("mutation", 900);
+        }
       } else {
-        scheduleFramePublish("mutation", 350);
+        scheduleFramePublish("mutation", 900);
       }
     });
     if (document.documentElement) {
       state.observer.observe(document.documentElement, {
         subtree: true,
         childList: true,
-        characterData: true
+        characterData: false
       });
     }
   }
 
-  function hasRelevantMutation(mutations) {
-    for (const mutation of mutations) {
-      const target = mutation.target;
-      if (target instanceof Node && isWithinUiRoot(target)) {
-        continue;
-      }
-      return true;
+  function disconnectDomObserver() {
+    if (!state.observer) {
+      return;
     }
-    return false;
+    state.observer.disconnect();
+    state.observer = null;
   }
 
-  function isWithinUiRoot(node) {
-    if (!state.ui || !state.ui.root) {
+  function isInternalMutation(record) {
+    if (!state.ui?.root) {
       return false;
     }
-    return state.ui.root === node || state.ui.root.contains(node);
+    if (state.ui.root.contains(record.target)) {
+      return true;
+    }
+    const nodes = [...record.addedNodes, ...record.removedNodes];
+    return nodes.length > 0 && nodes.every((node) => node === state.ui.root || state.ui.root.contains(node));
   }
 
   function createUi() {
@@ -256,10 +264,11 @@
 
     state.activeTarget = event.target;
     state.acceptedCandidate = null;
+    ensureDomObserver();
     if (state.isTopFrame) {
       positionPopover();
-      scheduleSnapshotCapture("focus", 80);
-      scheduleSuggest("focus", 60);
+      window.clearTimeout(state.captureTimer);
+      scheduleSuggest("focus", 100);
     } else {
       scheduleFramePublish("focus", 80);
     }
@@ -273,8 +282,7 @@
       state.activeTarget = event.target;
       positionPopover();
       maybeReportEditedAcceptance(event.target);
-      scheduleSuggest("input", 140);
-      scheduleSnapshotCapture("input", 500);
+      scheduleSuggest("input", 180);
     } else {
       scheduleFramePublish("input", 180);
     }
@@ -303,6 +311,8 @@
       if (target === state.activeTarget) {
         void commitCurrentValue("blur_commit");
         hidePopover();
+        state.activeTarget = null;
+        disconnectDomObserver();
       }
     }, 120);
   }
@@ -311,19 +321,15 @@
     if (!state.config.enabled) {
       return;
     }
-    if (state.viewportRafToken) {
-      return;
-    }
-    state.viewportRafToken = window.requestAnimationFrame(() => {
-      state.viewportRafToken = 0;
-      if (state.isTopFrame) {
-        positionPopover();
-        applyPanelPosition("sidebar");
-        scheduleSnapshotCapture("viewport", 420);
-      } else {
-        scheduleFramePublish("viewport", 420);
+    if (state.isTopFrame) {
+      positionPopover();
+      applyPanelPosition("sidebar");
+      if (state.activeTarget && document.contains(state.activeTarget)) {
+        scheduleSnapshotCapture("viewport", 900);
       }
-    });
+    } else {
+      scheduleFramePublish("viewport", 900);
+    }
   }
 
   function handleNavigation() {
@@ -335,10 +341,12 @@
     state.acceptedCandidate = null;
     if (state.isTopFrame) {
       renderSuggestions();
-      scheduleSnapshotCapture("navigation", 160);
-      scheduleSuggest("navigation", 220);
+      window.clearTimeout(state.captureTimer);
+      if (state.activeTarget && document.contains(state.activeTarget)) {
+        scheduleSuggest("navigation", 260);
+      }
     } else {
-      scheduleFramePublish("navigation", 180);
+      scheduleFramePublish("navigation", 700);
     }
   }
 
@@ -355,31 +363,28 @@
 
     if (!state.ui || state.ui.modal.dataset.visible === "true") {
       if (event.key === "Escape") {
-        event.preventDefault();
         closeSearchModal();
       }
       return;
     }
 
-    if (event.target instanceof Node && isWithinUiRoot(event.target)) {
-      return;
-    }
-
-    if (!state.suggestions.length || state.ui.popover.dataset.visible !== "true") {
+    if (!state.suggestions.length || !state.ui.popover.dataset.visible || state.ui.popover.dataset.visible !== "true") {
       return;
     }
 
     if (event.key === "ArrowDown") {
       event.preventDefault();
       state.selectedIndex = (state.selectedIndex + 1) % state.suggestions.length;
-      renderSuggestions();
+      updateActiveSuggestionItem();
+      renderSidebar(state.lastSnapshot, state.suggestions[state.selectedIndex] || null);
       return;
     }
 
     if (event.key === "ArrowUp") {
       event.preventDefault();
       state.selectedIndex = (state.selectedIndex - 1 + state.suggestions.length) % state.suggestions.length;
-      renderSuggestions();
+      updateActiveSuggestionItem();
+      renderSidebar(state.lastSnapshot, state.suggestions[state.selectedIndex] || null);
       return;
     }
 
@@ -528,7 +533,6 @@
       void apiRequest("/feedback", "POST", {
         event_type: "show",
         candidate_ids: state.suggestions.map((item) => item.candidate_id),
-        sample_snapshot: snapshot,
         payload: { reason }
       });
     } else {
@@ -636,13 +640,6 @@
       return;
     }
     state.ui.modal.dataset.visible = "false";
-    if (state.activeTarget && document.contains(state.activeTarget)) {
-      try {
-        state.activeTarget.focus({ preventScroll: true });
-      } catch (error) {
-        // focus restoration is best-effort
-      }
-    }
   }
 
   async function runSearch(query) {
@@ -737,7 +734,7 @@
         normalizeText(label.region),
         label.order
       ].join("|");
-    }).slice(0, 260);
+    }).slice(0, SNAPSHOT_LIMITS.labels);
 
     return {
       site_id: location.host || "generic-ocr-site",
@@ -755,9 +752,7 @@
 
   function extractVisibleLabels(activeTarget) {
     const labels = [];
-    const cardContainers = Array.from(document.querySelectorAll(CONTAINER_SELECTORS))
-      .filter(isVisible)
-      .slice(0, 160);
+    const cardContainers = collectVisibleElements(document, CONTAINER_SELECTORS, SNAPSHOT_LIMITS.containers);
     if (cardContainers.length) {
       cardContainers.forEach((container, index) => {
         const label = extractLabelFromContainer(container, index, activeTarget);
@@ -768,9 +763,7 @@
       return labels;
     }
 
-    const editables = Array.from(document.querySelectorAll(EDITABLE_SELECTOR))
-      .filter(isTrackableEditable)
-      .slice(0, 120);
+    const editables = collectTrackableEditables(document, SNAPSHOT_LIMITS.editables);
 
     editables.forEach((editable, index) => {
       const active = extractActiveTarget(editable);
@@ -783,6 +776,34 @@
       });
     });
     return labels;
+  }
+
+  function collectVisibleElements(root, selector, limit) {
+    const result = [];
+    for (const element of root.querySelectorAll(selector)) {
+      if (!isVisible(element)) {
+        continue;
+      }
+      result.push(element);
+      if (result.length >= limit) {
+        break;
+      }
+    }
+    return result;
+  }
+
+  function collectTrackableEditables(root, limit) {
+    const result = [];
+    for (const editable of root.querySelectorAll(EDITABLE_SELECTOR)) {
+      if (!isTrackableEditable(editable)) {
+        continue;
+      }
+      result.push(editable);
+      if (result.length >= limit) {
+        break;
+      }
+    }
+    return result;
   }
 
   function extractLabelFromContainer(container, order, activeTarget) {
@@ -866,8 +887,7 @@
     if (!container) {
       return null;
     }
-    const editables = Array.from(container.querySelectorAll(EDITABLE_SELECTOR))
-      .filter(isTrackableEditable);
+    const editables = collectTrackableEditables(container, 12);
     if (!editables.length) {
       return null;
     }
@@ -895,10 +915,13 @@
       : document.body;
 
     const candidates = new Set();
-    const elements = Array.from(
-      anchor.querySelectorAll("h1, h2, h3, h4, legend, label, .panel-title, .anno-title, .field span, .ant-form-item-label, .el-form-item__label, p, th, td, .meta")
-    ).slice(0, 80);
+    const elements = anchor.querySelectorAll("h1, h2, h3, h4, legend, label, .panel-title, .anno-title, .field span, .ant-form-item-label, .el-form-item__label, p, th, td, .meta");
+    let inspected = 0;
     for (const element of elements) {
+      if (inspected >= SNAPSHOT_LIMITS.neighborElements) {
+        break;
+      }
+      inspected += 1;
       if (activeTarget && activeTarget.contains(element)) {
         continue;
       }
@@ -982,6 +1005,9 @@
     }
     const frames = document.querySelectorAll("iframe");
     for (const frame of frames) {
+      if (unreadable.length >= SNAPSHOT_LIMITS.frames) {
+        break;
+      }
       try {
         const frameDocument = frame.contentDocument;
         if (!frameDocument) {
@@ -1051,13 +1077,22 @@
       `;
       button.addEventListener("mouseenter", () => {
         state.selectedIndex = index;
-        renderSuggestions();
+        updateActiveSuggestionItem();
         renderSidebar(state.lastSnapshot, item);
       });
       button.addEventListener("click", () => {
         void acceptSuggestion(item);
       });
       list.appendChild(button);
+    });
+  }
+
+  function updateActiveSuggestionItem() {
+    if (!state.ui) {
+      return;
+    }
+    state.ui.list.querySelectorAll(".ocr-lr-item").forEach((item, index) => {
+      item.dataset.active = index === state.selectedIndex ? "true" : "false";
     });
   }
 
@@ -1326,9 +1361,6 @@
     if (!node.matches(EDITABLE_SELECTOR)) {
       return false;
     }
-    if (isWithinUiRoot(node)) {
-      return false;
-    }
     if (!isVisible(node)) {
       return false;
     }
@@ -1473,41 +1505,14 @@
   }
 
   async function sendMessage(message) {
-    if (state.contextLost) {
-      return { ok: false, error: "Extension context unavailable." };
-    }
-    if (!chrome?.runtime?.id) {
-      handleContextLost();
-      return { ok: false, error: "Extension context unavailable." };
-    }
     try {
       return await chrome.runtime.sendMessage(message);
     } catch (error) {
-      const text = error instanceof Error ? error.message : String(error);
-      if (
-        text.includes("Extension context invalidated") ||
-        text.includes("context invalidated")
-      ) {
-        handleContextLost();
-      }
-      return { ok: false, error: text };
+      return {
+        ok: false,
+        error: error instanceof Error ? error.message : String(error)
+      };
     }
-  }
-
-  function handleContextLost() {
-    if (state.contextLost) {
-      return;
-    }
-    state.contextLost = true;
-    state.config.enabled = false;
-    if (state.observer) {
-      try {
-        state.observer.disconnect();
-      } catch (error) {
-        // observer may already be disconnected
-      }
-    }
-    hideAllUi();
   }
 
   function installHistoryHooks() {

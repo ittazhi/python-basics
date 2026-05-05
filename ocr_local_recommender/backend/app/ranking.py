@@ -101,21 +101,13 @@ def _field_position_similarity(
     source_key = canonical_label_type(source_type)
     if not current_key or not source_key:
         return 0.0
-    current_indices = [i for i, key in enumerate(current_sequence) if key == current_key]
-    source_indices = [i for i, key in enumerate(source_sequence) if key == source_key]
-    if not current_indices or not source_indices:
+    if current_key not in current_sequence or source_key not in source_sequence:
         return 0.0
-    current_span = max(len(current_sequence) - 1, 1)
-    source_span = max(len(source_sequence) - 1, 1)
-    best = 0.0
-    for current_index in current_indices:
-        current_ratio = current_index / current_span
-        for source_index in source_indices:
-            source_ratio = source_index / source_span
-            score = max(0.0, 1.0 - abs(current_ratio - source_ratio))
-            if score > best:
-                best = score
-    return best
+    current_index = current_sequence.index(current_key)
+    source_index = source_sequence.index(source_key)
+    current_ratio = current_index / max(len(current_sequence) - 1, 1)
+    source_ratio = source_index / max(len(source_sequence) - 1, 1)
+    return max(0.0, 1.0 - abs(current_ratio - source_ratio))
 
 
 def _char_coverage(query: str, candidate: str) -> float:
@@ -195,7 +187,13 @@ class SuggestionEngine:
         include_weak = search_mode or bool(normalized_query)
         # Fetch broadly, then rank in Python. This keeps light typo/missing-char
         # tolerance from being defeated by a strict SQL substring prefilter.
-        candidates = self.storage.fetch_candidate_bundles(include_weak=include_weak, query="")
+        candidate_limit = 700 if search_mode else 350
+        candidates = self.storage.fetch_candidate_bundles(
+            include_weak=include_weak,
+            query="",
+            limit=candidate_limit,
+            sources_per_candidate=6,
+        )
         current_type = snapshot.target_label_type if snapshot else ""
         current_canonical_type = canonical_label_type(current_type)
         current_region = snapshot.target_region if snapshot else ""
@@ -220,21 +218,6 @@ class SuggestionEngine:
             for text in (snapshot.neighbor_texts if snapshot else [])
             if normalize_text(text)
         }
-
-        # Precompute query-side properties that are constant across candidates so
-        # that ranking N candidates does not redo the same work N times.
-        query_is_long_digit = is_long_digit_like(query) if normalized_query else False
-        input_kind = classify_value(query) if query else "empty"
-        current_label_key = current_canonical_type
-        same_label_kinds: set[str] = set()
-        if current_label_key and snapshot:
-            for label in snapshot.visible_labels:
-                if canonical_label_type(label.label_type) == current_label_key and label.value:
-                    same_label_kinds.add(classify_value(label.value))
-        same_label_families = {value_family(kind) for kind in same_label_kinds}
-        empty_input_context_threshold = self._empty_input_context_threshold(current_sequence)
-        now_utc = datetime.now(timezone.utc)
-
         results: list[dict[str, Any]] = []
 
         for candidate in candidates:
@@ -251,7 +234,7 @@ class SuggestionEngine:
             if normalized_query:
                 score += input_score
                 reasons.extend(input_reasons)
-                if query_is_long_digit and is_long_digit_like(candidate["text"]) and input_score <= 0:
+                if is_long_digit_like(query) and is_long_digit_like(candidate["text"]) and input_score <= 0:
                     continue
                 if input_score <= 0 and candidate["tier"] == "weak":
                     continue
@@ -280,9 +263,8 @@ class SuggestionEngine:
 
             compatibility_score, compatibility_reasons = self._score_value_shape_support(
                 current_type=current_type,
-                input_kind=input_kind,
-                same_label_kinds=same_label_kinds,
-                same_label_families=same_label_families,
+                current_input=query,
+                snapshot=snapshot,
                 candidate_text=candidate["text"],
                 best_source=best_source,
             )
@@ -299,14 +281,14 @@ class SuggestionEngine:
 
             last_used = _parse_iso(candidate["last_used_at"])
             if last_used:
-                age_days = max((now_utc - last_used).days, 0)
+                age_days = max((datetime.now(timezone.utc) - last_used).days, 0)
                 if age_days <= 3:
                     score += 6.0
                     reasons.append("recently reused")
                 elif age_days <= 14:
                     score += 2.0
 
-            if not normalized_query and best_source_score < empty_input_context_threshold and not search_mode:
+            if not normalized_query and best_source_score < self._empty_input_context_threshold(current_sequence) and not search_mode:
                 continue
             if normalized_query and input_score < 6.0 and best_source_score < 14.0 and not search_mode:
                 continue
@@ -487,17 +469,17 @@ class SuggestionEngine:
     def _score_value_shape_support(
         self,
         current_type: str,
-        input_kind: str,
-        same_label_kinds: set[str],
-        same_label_families: set[str],
+        current_input: str,
+        snapshot: Optional[SampleSnapshotPayload],
         candidate_text: str,
         best_source: Optional[dict[str, Any]],
     ) -> tuple[float, list[str]]:
         candidate_kind = classify_value(candidate_text)
+        input_kind = classify_value(current_input)
         score = 0.0
         reasons: list[str] = []
 
-        if input_kind and input_kind != "empty":
+        if current_input and input_kind != "empty":
             if candidate_kind == input_kind:
                 score += 6.0
                 reasons.append("same input shape")
@@ -508,11 +490,18 @@ class SuggestionEngine:
                 score -= 6.0
                 reasons.append("different input shape")
 
+        current_label_key = canonical_label_type(current_type)
+        same_label_values = []
+        if current_label_key:
+            for label in (snapshot.visible_labels if snapshot else []):
+                if canonical_label_type(label.label_type) == current_label_key and label.value:
+                    same_label_values.append(label.value)
+        same_label_kinds = {classify_value(value) for value in same_label_values}
         if same_label_kinds:
             if candidate_kind in same_label_kinds:
                 score += 6.0
                 reasons.append("same label value shape")
-            elif value_family(candidate_kind) in same_label_families:
+            elif value_family(candidate_kind) in {value_family(kind) for kind in same_label_kinds}:
                 score += 2.0
                 reasons.append("same label value family")
             else:

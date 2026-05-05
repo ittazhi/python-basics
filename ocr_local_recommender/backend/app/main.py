@@ -19,9 +19,7 @@ from .models import (
 from .ranking import SuggestionEngine
 from .storage import Storage
 
-_DEFAULT_DATA_DIR = Path(__file__).resolve().parents[1] / "data"
-_data_dir_env = os.getenv("OCR_RECOMMENDER_DATA_DIR", "").strip()
-DATA_DIR = Path(_data_dir_env) if _data_dir_env else _DEFAULT_DATA_DIR
+DATA_DIR = Path(os.getenv("OCR_RECOMMENDER_DATA_DIR", Path(__file__).resolve().parents[1] / "data"))
 storage = Storage(DATA_DIR)
 engine = SuggestionEngine(storage)
 clipboard_watcher = ClipboardWatcher(storage)
@@ -53,6 +51,7 @@ def health() -> dict[str, object]:
     return {
         "ok": True,
         "clipboard_watcher": clipboard_watcher.enabled,
+        "clipboard_poll_interval": clipboard_watcher.poll_interval,
         "data_dir": str(DATA_DIR),
     }
 

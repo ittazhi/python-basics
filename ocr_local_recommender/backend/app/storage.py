@@ -27,15 +27,6 @@ def _json_load(text: str | None, default: Any) -> Any:
     return json.loads(text)
 
 
-def _escape_like(value: str) -> str:
-    """Escape SQLite LIKE wildcards so user input is matched literally."""
-    return (
-        value.replace("\\", "\\\\")
-        .replace("%", "\\%")
-        .replace("_", "\\_")
-    )
-
-
 class Storage:
     def __init__(self, data_dir: Path) -> None:
         self.data_dir = data_dir
@@ -475,7 +466,7 @@ class Storage:
                   cs.last_shown_at,
                   cs.last_used_at
                 FROM candidate_value cv
-                LEFT JOIN candidate_stats cs ON cs.candidate_id = cv.id
+                JOIN candidate_stats cs ON cs.candidate_id = cv.id
                 WHERE cv.id = ?
                 """,
                 (candidate_id,),
@@ -491,10 +482,10 @@ class Storage:
                 "first_seen_at": row["first_seen_at"],
                 "last_seen_at": row["last_seen_at"],
                 "repeat_count": int(row["repeat_count"]),
-                "source_count": int(row["source_count"] or 0),
-                "accept_count": int(row["accept_count"] or 0),
-                "dismiss_count": int(row["dismiss_count"] or 0),
-                "edit_after_accept_count": int(row["edit_after_accept_count"] or 0),
+                "source_count": int(row["source_count"]),
+                "accept_count": int(row["accept_count"]),
+                "dismiss_count": int(row["dismiss_count"]),
+                "edit_after_accept_count": int(row["edit_after_accept_count"]),
                 "blacklisted": bool(row["blacklisted"]),
                 "last_shown_at": row["last_shown_at"] or "",
                 "last_used_at": row["last_used_at"] or "",
@@ -513,7 +504,8 @@ class Storage:
         include_weak: bool = True,
         query: str = "",
         include_blacklisted: bool = False,
-        limit: Optional[int] = None,
+        limit: int | None = None,
+        sources_per_candidate: int = 6,
     ) -> list[dict[str, Any]]:
         with self._lock:
             params: list[Any] = []
@@ -524,21 +516,13 @@ class Storage:
                 clauses.append("cv.tier = 'strong'")
             normalized_query = normalize_text(query)
             if normalized_query:
-                clauses.append(
-                    "(cv.normalized_text LIKE ? ESCAPE '\\' OR cv.display_text LIKE ? ESCAPE '\\')"
-                )
-                params.extend(
-                    [
-                        f"%{_escape_like(normalized_query)}%",
-                        f"%{_escape_like(query.strip())}%",
-                    ]
-                )
+                clauses.append("(cv.normalized_text LIKE ? OR cv.display_text LIKE ?)")
+                params.extend([f"%{normalized_query}%", f"%{query.strip()}%"])
             where_clause = "WHERE " + " AND ".join(clauses) if clauses else ""
-
             limit_clause = ""
-            if isinstance(limit, int) and limit > 0:
+            if limit is not None:
                 limit_clause = "LIMIT ?"
-                params.append(int(limit))
+                params.append(max(1, int(limit)))
 
             rows = self.memory_conn.execute(
                 f"""
@@ -558,15 +542,15 @@ class Storage:
                   cs.last_shown_at,
                   cs.last_used_at
                 FROM candidate_value cv
-                LEFT JOIN candidate_stats cs ON cs.candidate_id = cv.id
+                JOIN candidate_stats cs ON cs.candidate_id = cv.id
                 {where_clause}
-                ORDER BY COALESCE(cs.accept_count, 0) DESC, cv.last_seen_at DESC
+                ORDER BY cs.accept_count DESC, cv.last_seen_at DESC
                 {limit_clause}
                 """,
                 tuple(params),
             ).fetchall()
             candidate_ids = [int(row["id"]) for row in rows]
-            source_map = self._fetch_sources(candidate_ids)
+            source_map = self._fetch_sources(candidate_ids, sources_per_candidate=sources_per_candidate)
             bundles: list[dict[str, Any]] = []
             for row in rows:
                 candidate_id = int(row["id"])
@@ -580,10 +564,10 @@ class Storage:
                         "first_seen_at": row["first_seen_at"],
                         "last_seen_at": row["last_seen_at"],
                         "repeat_count": int(row["repeat_count"]),
-                        "source_count": int(row["source_count"] or 0),
-                        "accept_count": int(row["accept_count"] or 0),
-                        "dismiss_count": int(row["dismiss_count"] or 0),
-                        "edit_after_accept_count": int(row["edit_after_accept_count"] or 0),
+                        "source_count": int(row["source_count"]),
+                        "accept_count": int(row["accept_count"]),
+                        "dismiss_count": int(row["dismiss_count"]),
+                        "edit_after_accept_count": int(row["edit_after_accept_count"]),
                         "blacklisted": bool(row["blacklisted"]),
                         "last_shown_at": row["last_shown_at"] or "",
                         "last_used_at": row["last_used_at"] or "",
@@ -600,12 +584,12 @@ class Storage:
             return bundles
 
     def list_entries(self, query: str = "", limit: int = 100) -> list[dict[str, Any]]:
-        safe_limit = max(1, min(int(limit), 1000)) if isinstance(limit, int) else 100
         return self.fetch_candidate_bundles(
             include_weak=True,
             query=query,
             include_blacklisted=True,
-            limit=safe_limit,
+            limit=limit,
+            sources_per_candidate=8,
         )
 
     def list_logs(self, limit: int = 200) -> list[dict[str, Any]]:
@@ -630,12 +614,14 @@ class Storage:
                 for row in rows
             ]
 
-    def _fetch_sources(self, candidate_ids: list[int]) -> dict[int, list[dict[str, Any]]]:
+    def _fetch_sources(self, candidate_ids: list[int], sources_per_candidate: int = 6) -> dict[int, list[dict[str, Any]]]:
         if not candidate_ids:
             return {}
         placeholders = ", ".join("?" for _ in candidate_ids)
         rows = self.memory_conn.execute(
             f"""
+            SELECT *
+            FROM (
             SELECT
               id,
               candidate_id,
@@ -646,12 +632,15 @@ class Storage:
               sample_snapshot_id,
               page_identity,
               context_terms_json,
-              created_at
+              created_at,
+              ROW_NUMBER() OVER (PARTITION BY candidate_id ORDER BY created_at DESC) AS source_rank
             FROM candidate_source
             WHERE candidate_id IN ({placeholders})
-            ORDER BY created_at DESC
+            )
+            WHERE source_rank <= ?
+            ORDER BY candidate_id, created_at DESC
             """,
-            tuple(candidate_ids),
+            (*candidate_ids, max(1, int(sources_per_candidate))),
         ).fetchall()
         snapshot_ids = sorted(
             {

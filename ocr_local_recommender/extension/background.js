@@ -4,10 +4,6 @@ const DEFAULT_CONFIG = {
   apiBase: "http://127.0.0.1:8765"
 };
 
-const API_REQUEST_TIMEOUT_MS = 8000;
-const FRAME_SNAPSHOT_TTL_MS = 5 * 60 * 1000;
-const MAX_FRAMES_PER_TAB = 24;
-
 const frameSnapshotsByTab = new Map();
 
 chrome.runtime.onInstalled.addListener(() => {
@@ -43,12 +39,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         sendResponse({ ok: true, fragments: getFrameSnapshots(sender, message) });
         break;
       case "ocr-assist:open-dashboard":
-        try {
-          await chrome.runtime.openOptionsPage();
-          sendResponse({ ok: true });
-        } catch (error) {
-          sendResponse({ ok: false, error: error?.message || String(error) });
-        }
+        await chrome.runtime.openOptionsPage();
+        sendResponse({ ok: true });
         break;
       default:
         sendResponse({ ok: false, error: "Unsupported message type." });
@@ -80,37 +72,13 @@ async function getConfig() {
 }
 
 async function setConfig(patch) {
-  const sanitizedPatch = sanitizeConfigPatch(patch);
   const nextConfig = {
     ...(await getConfig()),
-    ...sanitizedPatch
+    ...patch
   };
   await chrome.storage.local.set({ [CONFIG_KEY]: nextConfig });
   await broadcastConfig(nextConfig);
   return nextConfig;
-}
-
-function sanitizeConfigPatch(patch) {
-  const result = {};
-  if (typeof patch.enabled === "boolean") {
-    result.enabled = patch.enabled;
-  }
-  if (typeof patch.apiBase === "string") {
-    const cleaned = patch.apiBase.trim();
-    if (cleaned && isValidApiBase(cleaned)) {
-      result.apiBase = cleaned.replace(/\/+$/, "");
-    }
-  }
-  return result;
-}
-
-function isValidApiBase(value) {
-  try {
-    const url = new URL(value);
-    return url.protocol === "http:" || url.protocol === "https:";
-  } catch (error) {
-    return false;
-  }
 }
 
 async function broadcastConfig(config) {
@@ -126,8 +94,8 @@ async function broadcastConfig(config) {
       });
     } catch (error) {
       const message = chrome.runtime.lastError?.message || error?.message || "";
-      if (message && !message.includes("Receiving end does not exist")) {
-        console.warn("Failed to broadcast config:", message);
+      if (!message.includes("Receiving end does not exist")) {
+        console.warn("Failed to broadcast config:", error);
       }
     }
   }
@@ -137,49 +105,34 @@ async function apiRequest(message) {
   const config = await getConfig();
   const path = typeof message.path === "string" ? message.path : "/";
   const method = typeof message.method === "string" ? message.method.toUpperCase() : "GET";
+  const url = new URL(path, config.apiBase.endsWith("/") ? config.apiBase : `${config.apiBase}/`);
 
-  let url;
-  try {
-    url = new URL(path, config.apiBase.endsWith("/") ? config.apiBase : `${config.apiBase}/`);
-  } catch (error) {
-    return { ok: false, status: 0, error: "Invalid API base or path." };
-  }
-
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), API_REQUEST_TIMEOUT_MS);
   const options = {
     method,
-    headers: { "Content-Type": "application/json" },
-    signal: controller.signal
+    headers: {
+      "Content-Type": "application/json"
+    }
   };
+
   if (message.body !== undefined) {
     options.body = JSON.stringify(message.body);
   }
 
+  const response = await fetch(url.toString(), options);
+  const text = await response.text();
+  let data = null;
+
   try {
-    const response = await fetch(url.toString(), options);
-    const text = await response.text();
-    let data = null;
-    try {
-      data = text ? JSON.parse(text) : null;
-    } catch (error) {
-      data = { raw: text };
-    }
-    return {
-      ok: response.ok,
-      status: response.status,
-      data
-    };
+    data = text ? JSON.parse(text) : null;
   } catch (error) {
-    const isAbort = error?.name === "AbortError";
-    return {
-      ok: false,
-      status: 0,
-      error: isAbort ? "Request timed out." : error?.message || String(error)
-    };
-  } finally {
-    clearTimeout(timeoutId);
+    data = { raw: text };
   }
+
+  return {
+    ok: response.ok,
+    status: response.status,
+    data
+  };
 }
 
 function storeFrameSnapshot(sender, message) {
@@ -202,28 +155,7 @@ function storeFrameSnapshot(sender, message) {
     updatedAt: Date.now(),
     fragment
   });
-
-  pruneFrameEntries(tabEntry);
   return true;
-}
-
-function pruneFrameEntries(tabEntry) {
-  const cutoff = Date.now() - FRAME_SNAPSHOT_TTL_MS;
-  for (const [frameId, entry] of tabEntry) {
-    if (entry.updatedAt < cutoff) {
-      tabEntry.delete(frameId);
-    }
-  }
-  if (tabEntry.size <= MAX_FRAMES_PER_TAB) {
-    return;
-  }
-  const sortedEntries = [...tabEntry.entries()].sort(
-    (left, right) => left[1].updatedAt - right[1].updatedAt
-  );
-  while (tabEntry.size > MAX_FRAMES_PER_TAB && sortedEntries.length) {
-    const [frameId] = sortedEntries.shift();
-    tabEntry.delete(frameId);
-  }
 }
 
 function getFrameSnapshots(sender, message) {
@@ -235,8 +167,6 @@ function getFrameSnapshots(sender, message) {
   if (!tabEntry) {
     return [];
   }
-
-  pruneFrameEntries(tabEntry);
 
   const pageKey = String(message.pageKey || "");
   const currentFrameId = Number.isInteger(sender.frameId) ? sender.frameId : 0;
