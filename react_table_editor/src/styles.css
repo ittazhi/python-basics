@@ -82,6 +82,12 @@ button:disabled {
 }
 
 .table-scroll {
+  --table-zoom: 1;
+  --cell-width: calc(82px * var(--table-zoom));
+  --cell-height: calc(23px * var(--table-zoom));
+  --cell-pad-y: calc(2px * var(--table-zoom));
+  --cell-pad-x: calc(4px * var(--table-zoom));
+  --table-font-size: calc(12px * var(--table-zoom));
   flex: 1 1 auto;
   min-height: 0;
   overflow: auto;
@@ -94,22 +100,22 @@ button:disabled {
   table-layout: fixed;
   width: max-content;
   min-width: 0;
-  font-size: 12px;
+  font-size: var(--table-font-size);
   line-height: 1.25;
 }
 
 .editable-table col {
-  width: 82px;
+  width: var(--cell-width);
 }
 
 .editable-table th,
 .editable-table td {
   position: relative;
-  width: 82px;
-  min-width: 82px;
-  height: 23px;
+  width: var(--cell-width);
+  min-width: var(--cell-width);
+  height: var(--cell-height);
   max-width: 260px;
-  padding: 2px 4px;
+  padding: var(--cell-pad-y) var(--cell-pad-x);
   overflow: hidden;
   color: #111;
   text-align: left;
@@ -142,17 +148,17 @@ button:disabled {
 
 .cell-content {
   display: block;
-  min-height: 17px;
+  min-height: calc(17px * var(--table-zoom));
 }
 
 .cell-editor {
   display: block;
   width: 100%;
-  min-width: 82px;
+  min-width: var(--cell-width);
   height: 100%;
-  min-height: 23px;
+  min-height: var(--cell-height);
   margin: 0;
-  padding: 2px 4px;
+  padding: var(--cell-pad-y) var(--cell-pad-x);
   color: #111;
   background: #fff;
   border: 0;

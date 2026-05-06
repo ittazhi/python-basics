@@ -33,8 +33,12 @@ import type { CellSelection, GridOrigin, TableCellModel, TableGrid, TableModel }
 type GridPoint = { row: number; col: number };
 type SelectionState = { anchor: GridPoint; focus: GridPoint };
 type MenuState = { x: number; y: number } | null;
+type SourceMode = "view" | "import";
 
 const noopEditorKeyDown = () => undefined;
+const ZOOM_MIN = 0.6;
+const ZOOM_MAX = 1.8;
+const ZOOM_STEP = 0.1;
 
 type HistoryState = {
   model: TableModel;
@@ -160,6 +164,7 @@ const TableCellView = memo(function TableCellView({
   draft,
   onDraftChange,
   onEditorKeyDown,
+  onEditorBlur,
   onCellMouseDown,
   onCellMouseEnter,
   onCellDoubleClick,
@@ -173,6 +178,7 @@ const TableCellView = memo(function TableCellView({
   draft: string;
   onDraftChange: (value: string) => void;
   onEditorKeyDown: (event: KeyboardEvent<HTMLTextAreaElement>) => void;
+  onEditorBlur: () => void;
   onCellMouseDown: (event: ReactMouseEvent, point: GridPoint, cellId: string) => void;
   onCellMouseEnter: (point: GridPoint) => void;
   onCellDoubleClick: (cellId: string) => void;
@@ -221,6 +227,7 @@ const TableCellView = memo(function TableCellView({
           onMouseDown={(event) => event.stopPropagation()}
           onChange={(event) => onDraftChange(event.target.value)}
           onKeyDown={onEditorKeyDown}
+          onBlur={onEditorBlur}
         />
       ) : (
         <span className="cell-content" dangerouslySetInnerHTML={{ __html: cell.content || "" }} />
@@ -254,7 +261,8 @@ export function App() {
   const [editDraft, setEditDraft] = useState("");
   const [sourceOpen, setSourceOpen] = useState(false);
   const [sourceText, setSourceText] = useState("");
-  const [sourceDirty, setSourceDirty] = useState(false);
+  const [sourceMode, setSourceMode] = useState<SourceMode>("view");
+  const [zoom, setZoom] = useState(1);
   const [findText, setFindText] = useState("");
   const [replaceText, setReplaceText] = useState("");
   const [status, setStatus] = useState("");
@@ -268,6 +276,8 @@ export function App() {
   const gridRef = useRef(grid);
   const selectedIdsRef = useRef(selectedIds);
   const draggingRef = useRef(dragging);
+  const editingCellIdRef = useRef<string | null>(editingCellId);
+  const editDraftRef = useRef(editDraft);
   const liveHtmlString = useMemo(() => {
     if (!sourceOpen || !editingCellId) return htmlString;
     return serializeTableModel(updateCellContent(model, editingCellId, plainTextToCellHtml(editDraft)));
@@ -290,6 +300,14 @@ export function App() {
   }, [dragging]);
 
   useEffect(() => {
+    editingCellIdRef.current = editingCellId;
+  }, [editingCellId]);
+
+  useEffect(() => {
+    editDraftRef.current = editDraft;
+  }, [editDraft]);
+
+  useEffect(() => {
     setSelection((current) => {
       const anchor = clampPoint(current.anchor, grid);
       const focus = clampPoint(current.focus, grid);
@@ -306,11 +324,6 @@ export function App() {
       setEditDraft("");
     }
   }, [editingCellId, grid.cellMap]);
-
-  useEffect(() => {
-    if (!sourceOpen || sourceDirty) return;
-    setSourceText(liveHtmlString);
-  }, [liveHtmlString, sourceDirty, sourceOpen]);
 
   useEffect(() => {
     const stopDrag = () => setDragging(false);
@@ -334,9 +347,17 @@ export function App() {
   const startEditing = useCallback((cellId: string, initialValue?: string) => {
     const cell = gridRef.current.cellMap.get(cellId);
     if (!cell) return;
+    const nextDraft = initialValue ?? htmlToPlainText(cell.content);
+    editingCellIdRef.current = cellId;
+    editDraftRef.current = nextDraft;
     setEditingCellId(cellId);
-    setEditDraft(initialValue ?? htmlToPlainText(cell.content));
+    setEditDraft(nextDraft);
     setMenu(null);
+  }, []);
+
+  const updateEditDraft = useCallback((value: string) => {
+    editDraftRef.current = value;
+    setEditDraft(value);
   }, []);
 
   const moveTo = useCallback(
@@ -409,9 +430,11 @@ export function App() {
 
   const commitEditing = useCallback(
     (move: "down" | "right" | "left" | null = null) => {
-      if (!editingCellId) return;
-      const cellId = editingCellId;
-      const content = plainTextToCellHtml(editDraft);
+      const cellId = editingCellIdRef.current;
+      if (!cellId) return;
+      const content = plainTextToCellHtml(editDraftRef.current);
+      editingCellIdRef.current = null;
+      editDraftRef.current = "";
       dispatch({ type: "apply", update: (current) => updateCellContent(current, cellId, content) });
       setEditingCellId(null);
       setEditDraft("");
@@ -420,14 +443,20 @@ export function App() {
       if (move === "right") moveTab(false);
       if (move === "left") moveTab(true);
     },
-    [editDraft, editingCellId, moveDownAfterEdit, moveTab],
+    [moveDownAfterEdit, moveTab],
   );
 
   const cancelEditing = useCallback(() => {
+    editingCellIdRef.current = null;
+    editDraftRef.current = "";
     setEditingCellId(null);
     setEditDraft("");
     focusStage();
   }, [focusStage]);
+
+  const handleEditorBlur = useCallback(() => {
+    commitEditing(null);
+  }, [commitEditing]);
 
   const handleCellMouseDown = useCallback(
     (event: ReactMouseEvent, point: GridPoint) => {
@@ -663,14 +692,20 @@ export function App() {
   }, [applyModel, selectedIds]);
 
   const copyHtml = useCallback(async () => {
-    await writeClipboard(htmlString);
+    await writeClipboard(liveHtmlString);
     setStatus("已复制 HTML table。");
     focusStage();
-  }, [focusStage, htmlString]);
+  }, [focusStage, liveHtmlString]);
 
-  const openSource = useCallback(() => {
+  const openSourceView = useCallback(() => {
+    setSourceMode("view");
+    setSourceOpen(true);
+    setMenu(null);
+  }, []);
+
+  const openSourceImport = useCallback(() => {
+    setSourceMode("import");
     setSourceText(liveHtmlString);
-    setSourceDirty(false);
     setSourceOpen(true);
     setMenu(null);
   }, [liveHtmlString]);
@@ -681,7 +716,7 @@ export function App() {
       dispatch({ type: "replace", model: next });
       setSelection({ anchor: { row: 0, col: 0 }, focus: { row: 0, col: 0 } });
       setSourceOpen(false);
-      setSourceDirty(false);
+      setSourceMode("view");
       setStatus("已导入 HTML table。");
       focusStage();
     } catch (error) {
@@ -697,6 +732,14 @@ export function App() {
   const applyBatchTrim = useCallback(() => {
     applyModel((current) => batchTrim(current, selectedRect), undefined, "已清理选区首尾空格。");
   }, [applyModel, selectedRect]);
+
+  const changeZoom = useCallback((delta: number) => {
+    setZoom((current) => Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, Number((current + delta).toFixed(2)))));
+  }, []);
+
+  const resetZoom = useCallback(() => {
+    setZoom(1);
+  }, []);
 
   const rowsBySection = useMemo(() => {
     return {
@@ -727,8 +770,9 @@ export function App() {
                   active={activeCellId === cell.id}
                   editing={editingCellId === cell.id}
                   draft={editingCellId === cell.id ? editDraft : ""}
-                  onDraftChange={setEditDraft}
+                  onDraftChange={updateEditDraft}
                   onEditorKeyDown={editingCellId === cell.id ? handleEditorKeyDown : noopEditorKeyDown}
+                  onEditorBlur={handleEditorBlur}
                   onCellMouseDown={handleCellMouseDown}
                   onCellMouseEnter={handleCellMouseEnter}
                   onCellDoubleClick={startEditing}
@@ -748,9 +792,9 @@ export function App() {
   return (
     <div className="app">
       <div className="toolbar">
-        <button type="button" onClick={openSource}>导入HTML</button>
+        <button type="button" onClick={openSourceImport}>导入HTML</button>
         <button type="button" onClick={copyHtml}>复制HTML</button>
-        <button type="button" onClick={openSource}>HTML</button>
+        <button type="button" onClick={openSourceView}>HTML</button>
         <span className="split" />
         <button type="button" disabled={history.past.length === 0} onClick={() => dispatch({ type: "undo" })}>撤销</button>
         <button type="button" disabled={history.future.length === 0} onClick={() => dispatch({ type: "redo" })}>重做</button>
@@ -764,6 +808,10 @@ export function App() {
         <button type="button" onClick={mergeSelection}>合并</button>
         <button type="button" onClick={splitActiveCell}>拆分</button>
         <button type="button" onClick={toggleActiveTag}>td/th</button>
+        <span className="split" />
+        <button type="button" title="缩小表格" onClick={() => changeZoom(-ZOOM_STEP)}>－</button>
+        <button type="button" title="恢复 100% 缩放" onClick={resetZoom}>{Math.round(zoom * 100)}%</button>
+        <button type="button" title="放大表格" onClick={() => changeZoom(ZOOM_STEP)}>＋</button>
         <span className="status">
           {activeLabel} · {selectedSize}
           {activeCell ? ` · ${activeCell.tag}` : ""}
@@ -774,6 +822,7 @@ export function App() {
       <div
         ref={stageRef}
         className="table-scroll"
+        style={{ "--table-zoom": zoom } as CSSProperties}
         tabIndex={0}
         onKeyDown={handleKeyDown}
         onCopy={handleCopy}
@@ -819,15 +868,16 @@ export function App() {
 
       <div className={`source-panel ${sourceOpen ? "is-open" : ""}`}>
         <div className="source-toolbar">
-          <button type="button" onClick={importSource}>导入</button>
+          {sourceMode === "import" ? (
+            <button type="button" onClick={importSource}>应用导入</button>
+          ) : (
+            <button type="button" onClick={openSourceImport}>编辑导入</button>
+          )}
           <button type="button" onClick={copyHtml}>复制</button>
-          <button type="button" onClick={() => {
-            setSourceText(liveHtmlString);
-            setSourceDirty(false);
-          }}>格式化</button>
+          <button type="button" onClick={openSourceView}>实时HTML</button>
           <button type="button" onClick={() => {
             setSourceOpen(false);
-            setSourceDirty(false);
+            setSourceMode("view");
           }}>关闭</button>
           <details className="batch-tools">
             <summary>批量</summary>
@@ -839,11 +889,11 @@ export function App() {
         </div>
         <textarea
           className="source-textarea"
-          value={sourceText}
+          value={sourceMode === "import" ? sourceText : liveHtmlString}
+          readOnly={sourceMode === "view"}
           spellCheck={false}
           onChange={(event) => {
-            setSourceText(event.target.value);
-            setSourceDirty(true);
+            if (sourceMode === "import") setSourceText(event.target.value);
           }}
         />
       </div>
