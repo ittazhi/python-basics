@@ -36,9 +36,17 @@ type MenuState = { x: number; y: number } | null;
 type SourceMode = "view" | "import";
 
 const noopEditorKeyDown = () => undefined;
+const DEFAULT_COL_WIDTH = 82;
+const MIN_COL_WIDTH = 42;
+const MAX_COL_WIDTH = 420;
+const DEFAULT_ROW_HEIGHT = 23;
+const MIN_ROW_HEIGHT = 22;
+const MAX_ROW_HEIGHT = 240;
 const ZOOM_MIN = 0.6;
 const ZOOM_MAX = 1.8;
 const ZOOM_STEP = 0.1;
+const ROW_HEADER_WIDTH = 34;
+const COLUMN_HEADER_HEIGHT = 24;
 
 type HistoryState = {
   model: TableModel;
@@ -155,6 +163,25 @@ function getTableReactProps(attrs: Record<string, string>) {
   };
 }
 
+function columnLabel(index: number): string {
+  let value = index + 1;
+  let label = "";
+  while (value > 0) {
+    const remainder = (value - 1) % 26;
+    label = String.fromCharCode(65 + remainder) + label;
+    value = Math.floor((value - 1) / 26);
+  }
+  return label;
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, value));
+}
+
+function getCellLineCount(cell: TableCellModel): number {
+  return Math.max(1, htmlToPlainText(cell.content).split("\n").length);
+}
+
 const TableCellView = memo(function TableCellView({
   cell,
   origin,
@@ -255,14 +282,20 @@ export function App() {
   const htmlString = useMemo(() => serializeTableModel(model), [model]);
 
   const stageRef = useRef<HTMLDivElement | null>(null);
+  const resizeRef = useRef<{ type: "col" | "row"; index: number; startPointer: number; startSize: number } | null>(null);
   const [selection, setSelection] = useState<SelectionState>({ anchor: { row: 0, col: 0 }, focus: { row: 0, col: 0 } });
   const [dragging, setDragging] = useState(false);
   const [editingCellId, setEditingCellId] = useState<string | null>(null);
   const [editDraft, setEditDraft] = useState("");
+  const [formulaText, setFormulaText] = useState("");
+  const [formulaFocused, setFormulaFocused] = useState(false);
+  const [formulaCellId, setFormulaCellId] = useState<string | null>(null);
   const [sourceOpen, setSourceOpen] = useState(false);
   const [sourceText, setSourceText] = useState("");
   const [sourceMode, setSourceMode] = useState<SourceMode>("view");
   const [zoom, setZoom] = useState(1);
+  const [colWidths, setColWidths] = useState<number[]>([]);
+  const [rowHeightOverrides, setRowHeightOverrides] = useState<Array<number | null>>([]);
   const [findText, setFindText] = useState("");
   const [replaceText, setReplaceText] = useState("");
   const [status, setStatus] = useState("");
@@ -273,15 +306,40 @@ export function App() {
   const activeCellId = useMemo(() => getSlotCellId(grid, selection.focus), [grid, selection.focus]);
   const activeCell = activeCellId ? grid.cellMap.get(activeCellId) : null;
   const activeOrigin = activeCellId ? grid.origins.get(activeCellId) : null;
+  const activePlainText = activeCell ? htmlToPlainText(activeCell.content) : "";
+  const contentRowHeights = useMemo(() => {
+    return model.rows.map((row) => {
+      const maxLines = row.cells.reduce((max, cell) => Math.max(max, getCellLineCount(cell)), 1);
+      return clamp(8 + maxLines * 16, DEFAULT_ROW_HEIGHT, MAX_ROW_HEIGHT);
+    });
+  }, [model.rows]);
+  const rowHeights = useMemo(() => {
+    return Array.from({ length: grid.rowCount }, (_, index) => rowHeightOverrides[index] ?? contentRowHeights[index] ?? DEFAULT_ROW_HEIGHT);
+  }, [contentRowHeights, grid.rowCount, rowHeightOverrides]);
+  const visibleColWidths = useMemo(() => {
+    return Array.from({ length: grid.colCount }, (_, index) => colWidths[index] ?? DEFAULT_COL_WIDTH);
+  }, [colWidths, grid.colCount]);
+  const tableWidth = visibleColWidths.reduce((sum, width) => sum + width * zoom, 0);
+  const tableHeight = rowHeights.reduce((sum, height) => sum + height * zoom, 0);
+  const columnTemplate = visibleColWidths.map((width) => `${width * zoom}px`).join(" ");
+  const rowTemplate = rowHeights.map((height) => `${height * zoom}px`).join(" ");
   const gridRef = useRef(grid);
   const selectedIdsRef = useRef(selectedIds);
   const draggingRef = useRef(dragging);
   const editingCellIdRef = useRef<string | null>(editingCellId);
   const editDraftRef = useRef(editDraft);
+  const formulaTextRef = useRef(formulaText);
+  const formulaCellIdRef = useRef<string | null>(formulaCellId);
   const liveHtmlString = useMemo(() => {
-    if (!sourceOpen || !editingCellId) return htmlString;
-    return serializeTableModel(updateCellContent(model, editingCellId, plainTextToCellHtml(editDraft)));
-  }, [editDraft, editingCellId, htmlString, model, sourceOpen]);
+    if (!sourceOpen) return htmlString;
+    if (editingCellId) {
+      return serializeTableModel(updateCellContent(model, editingCellId, plainTextToCellHtml(editDraft)));
+    }
+    if (formulaFocused && formulaCellId) {
+      return serializeTableModel(updateCellContent(model, formulaCellId, plainTextToCellHtml(formulaText)));
+    }
+    return htmlString;
+  }, [editDraft, editingCellId, formulaCellId, formulaFocused, formulaText, htmlString, model, sourceOpen]);
 
   const focusStage = useCallback(() => {
     requestAnimationFrame(() => stageRef.current?.focus({ preventScroll: true }));
@@ -306,6 +364,28 @@ export function App() {
   useEffect(() => {
     editDraftRef.current = editDraft;
   }, [editDraft]);
+
+  useEffect(() => {
+    formulaTextRef.current = formulaText;
+  }, [formulaText]);
+
+  useEffect(() => {
+    formulaCellIdRef.current = formulaCellId;
+  }, [formulaCellId]);
+
+  useEffect(() => {
+    setColWidths((current) => Array.from({ length: grid.colCount }, (_, index) => current[index] ?? DEFAULT_COL_WIDTH));
+  }, [grid.colCount]);
+
+  useEffect(() => {
+    setRowHeightOverrides((current) => Array.from({ length: grid.rowCount }, (_, index) => current[index] ?? null));
+  }, [grid.rowCount]);
+
+  useEffect(() => {
+    if (formulaFocused) return;
+    setFormulaText(editingCellId === activeCellId ? editDraft : activePlainText);
+    setFormulaCellId(activeCellId);
+  }, [activeCellId, activePlainText, editDraft, editingCellId, formulaFocused]);
 
   useEffect(() => {
     setSelection((current) => {
@@ -335,6 +415,44 @@ export function App() {
       window.removeEventListener("scroll", closeMenu, true);
     };
   }, []);
+
+  useEffect(() => {
+    const handleResizeMove = (event: globalThis.MouseEvent) => {
+      const resize = resizeRef.current;
+      if (!resize) return;
+      const pointer = resize.type === "col" ? event.clientX : event.clientY;
+      const delta = (pointer - resize.startPointer) / zoom;
+      const nextSize = resize.type === "col"
+        ? clamp(resize.startSize + delta, MIN_COL_WIDTH, MAX_COL_WIDTH)
+        : clamp(resize.startSize + delta, MIN_ROW_HEIGHT, MAX_ROW_HEIGHT);
+
+      if (resize.type === "col") {
+        setColWidths((current) => {
+          const next = Array.from({ length: Math.max(gridRef.current.colCount, current.length) }, (_, index) => current[index] ?? DEFAULT_COL_WIDTH);
+          next[resize.index] = nextSize;
+          return next;
+        });
+      } else {
+        setRowHeightOverrides((current) => {
+          const next = Array.from({ length: Math.max(gridRef.current.rowCount, current.length) }, (_, index) => current[index] ?? null);
+          next[resize.index] = nextSize;
+          return next;
+        });
+      }
+    };
+
+    const stopResize = () => {
+      resizeRef.current = null;
+      document.body.classList.remove("is-resizing");
+    };
+
+    window.addEventListener("mousemove", handleResizeMove);
+    window.addEventListener("mouseup", stopResize);
+    return () => {
+      window.removeEventListener("mousemove", handleResizeMove);
+      window.removeEventListener("mouseup", stopResize);
+    };
+  }, [zoom]);
 
   const applyModel = useCallback((update: (model: TableModel) => TableModel, nextSelection?: SelectionState, nextStatus?: string) => {
     dispatch({ type: "apply", update });
@@ -428,14 +546,41 @@ export function App() {
     );
   }, [applyModel, grid.rowCount, moveTo, selection.focus]);
 
+  const commitFormula = useCallback(
+    (move: "right" | "left" | "down" | null = null) => {
+      const targetCellId = formulaCellIdRef.current ?? activeCellId;
+      if (!targetCellId) return;
+      const content = plainTextToCellHtml(formulaTextRef.current);
+      const currentContent = gridRef.current.cellMap.get(targetCellId)?.content ?? "";
+      if (editingCellIdRef.current === targetCellId) {
+        editingCellIdRef.current = null;
+        editDraftRef.current = "";
+        setEditingCellId(null);
+        setEditDraft("");
+      }
+      if (currentContent !== content) {
+        dispatch({ type: "apply", update: (current) => updateCellContent(current, targetCellId, content) });
+        setStatus("已更新当前单元格。");
+      }
+
+      if (move === "right") moveTab(false);
+      if (move === "left") moveTab(true);
+      if (move === "down") moveDownAfterEdit();
+    },
+    [activeCellId, moveDownAfterEdit, moveTab],
+  );
+
   const commitEditing = useCallback(
     (move: "down" | "right" | "left" | null = null) => {
       const cellId = editingCellIdRef.current;
       if (!cellId) return;
       const content = plainTextToCellHtml(editDraftRef.current);
+      const currentContent = gridRef.current.cellMap.get(cellId)?.content ?? "";
       editingCellIdRef.current = null;
       editDraftRef.current = "";
-      dispatch({ type: "apply", update: (current) => updateCellContent(current, cellId, content) });
+      if (currentContent !== content) {
+        dispatch({ type: "apply", update: (current) => updateCellContent(current, cellId, content) });
+      }
       setEditingCellId(null);
       setEditDraft("");
 
@@ -457,6 +602,30 @@ export function App() {
   const handleEditorBlur = useCallback(() => {
     commitEditing(null);
   }, [commitEditing]);
+
+  const handleFormulaKeyDown = useCallback(
+    (event: KeyboardEvent<HTMLTextAreaElement>) => {
+      if (event.key === "Enter" && !event.shiftKey) {
+        event.preventDefault();
+        commitFormula(null);
+        setFormulaFocused(false);
+        focusStage();
+      } else if (event.key === "Tab") {
+        event.preventDefault();
+        commitFormula(event.shiftKey ? "left" : "right");
+        setFormulaFocused(false);
+      } else if (event.key === "Escape") {
+        event.preventDefault();
+        const targetCellId = formulaCellIdRef.current ?? activeCellId;
+        const originalText = targetCellId ? htmlToPlainText(gridRef.current.cellMap.get(targetCellId)?.content ?? "") : activePlainText;
+        formulaTextRef.current = originalText;
+        setFormulaText(originalText);
+        setFormulaFocused(false);
+        focusStage();
+      }
+    },
+    [activePlainText, commitFormula, focusStage],
+  );
 
   const handleCellMouseDown = useCallback(
     (event: ReactMouseEvent, point: GridPoint) => {
@@ -741,6 +910,54 @@ export function App() {
     setZoom(1);
   }, []);
 
+  const selectColumn = useCallback(
+    (colIndex: number) => {
+      const point = { row: 0, col: colIndex };
+      setSelection({ anchor: point, focus: { row: Math.max(0, grid.rowCount - 1), col: colIndex } });
+      focusStage();
+    },
+    [focusStage, grid.rowCount],
+  );
+
+  const selectRow = useCallback(
+    (rowIndex: number) => {
+      const point = { row: rowIndex, col: 0 };
+      setSelection({ anchor: point, focus: { row: rowIndex, col: Math.max(0, grid.colCount - 1) } });
+      focusStage();
+    },
+    [focusStage, grid.colCount],
+  );
+
+  const startColumnResize = useCallback(
+    (event: ReactMouseEvent, colIndex: number) => {
+      event.preventDefault();
+      event.stopPropagation();
+      resizeRef.current = {
+        type: "col",
+        index: colIndex,
+        startPointer: event.clientX,
+        startSize: visibleColWidths[colIndex] ?? DEFAULT_COL_WIDTH,
+      };
+      document.body.classList.add("is-resizing");
+    },
+    [visibleColWidths],
+  );
+
+  const startRowResize = useCallback(
+    (event: ReactMouseEvent, rowIndex: number) => {
+      event.preventDefault();
+      event.stopPropagation();
+      resizeRef.current = {
+        type: "row",
+        index: rowIndex,
+        startPointer: event.clientY,
+        startSize: rowHeights[rowIndex] ?? DEFAULT_ROW_HEIGHT,
+      };
+      document.body.classList.add("is-resizing");
+    },
+    [rowHeights],
+  );
+
   const rowsBySection = useMemo(() => {
     return {
       thead: model.rows.map((row, index) => ({ row, index })).filter(({ row }) => row.section === "thead"),
@@ -757,7 +974,7 @@ export function App() {
     return (
       <SectionTag>
         {rows.map(({ row, index }) => (
-          <tr key={row.id} data-row-id={row.id} data-row-index={index}>
+          <tr key={row.id} data-row-id={row.id} data-row-index={index} style={{ height: `${(rowHeights[index] ?? DEFAULT_ROW_HEIGHT) * zoom}px` }}>
             {row.cells.map((cell) => {
               const origin = grid.origins.get(cell.id);
               if (!origin) return null;
@@ -819,6 +1036,30 @@ export function App() {
         </span>
       </div>
 
+      <div className={`formula-bar ${formulaFocused ? "is-focused" : ""}`}>
+        <div className="formula-ref">{activeLabel}</div>
+        <textarea
+          className="formula-input"
+          value={formulaText}
+          spellCheck={false}
+          placeholder="当前单元格内容"
+          onFocus={() => {
+            formulaCellIdRef.current = activeCellId;
+            setFormulaCellId(activeCellId);
+            setFormulaFocused(true);
+          }}
+          onBlur={() => {
+            commitFormula(null);
+            setFormulaFocused(false);
+          }}
+          onChange={(event) => {
+            formulaTextRef.current = event.target.value;
+            setFormulaText(event.target.value);
+          }}
+          onKeyDown={handleFormulaKeyDown}
+        />
+      </div>
+
       <div
         ref={stageRef}
         className="table-scroll"
@@ -828,16 +1069,51 @@ export function App() {
         onCopy={handleCopy}
         onPaste={handlePaste}
       >
-        <table {...getTableReactProps(model.attrs)}>
-          <colgroup>
-            {Array.from({ length: grid.colCount }, (_, index) => (
-              <col key={index} />
+        <div
+          className="sheet"
+          style={{
+            gridTemplateColumns: `${ROW_HEADER_WIDTH}px ${tableWidth}px`,
+            gridTemplateRows: `${COLUMN_HEADER_HEIGHT}px ${tableHeight}px`,
+          }}
+        >
+          <div className="sheet-corner" />
+          <div className="column-headers" style={{ gridTemplateColumns: columnTemplate }}>
+            {visibleColWidths.map((_, index) => (
+              <button
+                key={index}
+                type="button"
+                className={`column-header ${selectedRect.startCol <= index && selectedRect.endCol >= index ? "is-selected" : ""}`}
+                onClick={() => selectColumn(index)}
+              >
+                {columnLabel(index)}
+                <span className="col-resize-handle" onMouseDown={(event) => startColumnResize(event, index)} />
+              </button>
             ))}
-          </colgroup>
-          {renderSection("thead")}
-          {renderSection("tbody")}
-          {renderSection("tfoot")}
-        </table>
+          </div>
+          <div className="row-headers" style={{ gridTemplateRows: rowTemplate }}>
+            {rowHeights.map((_, index) => (
+              <button
+                key={index}
+                type="button"
+                className={`row-header ${selectedRect.startRow <= index && selectedRect.endRow >= index ? "is-selected" : ""}`}
+                onClick={() => selectRow(index)}
+              >
+                {index + 1}
+                <span className="row-resize-handle" onMouseDown={(event) => startRowResize(event, index)} />
+              </button>
+            ))}
+          </div>
+          <table {...getTableReactProps(model.attrs)}>
+            <colgroup>
+              {visibleColWidths.map((width, index) => (
+                <col key={index} style={{ width: `${width * zoom}px` }} />
+              ))}
+            </colgroup>
+            {renderSection("thead")}
+            {renderSection("tbody")}
+            {renderSection("tfoot")}
+          </table>
+        </div>
       </div>
 
       {menu && (

@@ -55,6 +55,36 @@ export function htmlToPlainText(value: string): string {
   return template.content.textContent ?? "";
 }
 
+function normalizeImportedCellText(value: string): string {
+  const normalized = value.replace(/\r\n?/g, "\n").replace(/\u00a0/g, " ");
+  const lines = normalized.split("\n");
+
+  while (lines.length > 0 && lines[0].trim() === "") lines.shift();
+  while (lines.length > 0 && lines[lines.length - 1].trim() === "") lines.pop();
+  if (lines.length === 0) return "";
+  if (lines.length === 1) return lines[0].trim();
+
+  const nonEmptyLines = lines.filter((line) => line.trim() !== "");
+  const commonIndent = nonEmptyLines.reduce((min, line) => {
+    const indent = line.match(/^[ \t]*/)?.[0].length ?? 0;
+    return Math.min(min, indent);
+  }, Number.POSITIVE_INFINITY);
+  const indent = Number.isFinite(commonIndent) ? commonIndent : 0;
+
+  return lines
+    .map((line) => line.slice(indent).replace(/[ \t]+$/g, ""))
+    .join("\n")
+    .trim();
+}
+
+function readCellContent(element: Element): string {
+  const clone = element.cloneNode(true) as Element;
+  for (const br of Array.from(clone.querySelectorAll("br"))) {
+    br.replaceWith(document.createTextNode("\n"));
+  }
+  return plainTextToCellHtml(normalizeImportedCellText(clone.textContent ?? ""));
+}
+
 function readAttrs(element: Element, skip: Set<string> = new Set()): Record<string, string> {
   const attrs: Record<string, string> = {};
   for (const attr of Array.from(element.attributes)) {
@@ -83,7 +113,7 @@ function parseRow(rowElement: HTMLTableRowElement, section: TableSection): Table
     cells.push({
       id: createId("cell"),
       tag: tag as "td" | "th",
-      content: child.innerHTML,
+      content: readCellContent(child),
       rowSpan: readSpan(child, "rowspan"),
       colSpan: readSpan(child, "colspan"),
       attrs: readAttrs(child, new Set(["rowspan", "colspan", "style"])),
