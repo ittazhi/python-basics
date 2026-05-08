@@ -1,0 +1,21 @@
+{
+  "manifest_version": 3,
+  "name": "Text Magnifier",
+  "version": "1.0.0",
+  "description": "Magnify text fields, table cells, and manually selected text on web pages.",
+  "permissions": ["activeTab", "scripting"],
+  "action": {
+    "default_title": "Text Magnifier"
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"],
+      "css": ["content.css"],
+      "run_at": "document_idle"
+    }
+  ]
+}

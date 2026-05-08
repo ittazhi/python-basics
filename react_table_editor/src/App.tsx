@@ -28,6 +28,7 @@ import {
   serializeTableModel,
   TableParseError,
 } from "./tableHtml";
+import { TextMagnifier } from "../../text_magnifier/TextMagnifier";
 import type { CellSelection, GridOrigin, TableCellModel, TableGrid, TableModel } from "./types";
 
 type GridPoint = { row: number; col: number };
@@ -294,6 +295,7 @@ export function App() {
   const [sourceText, setSourceText] = useState("");
   const [sourceMode, setSourceMode] = useState<SourceMode>("view");
   const [zoom, setZoom] = useState(1);
+  const [magnifierEnabled, setMagnifierEnabled] = useState(false);
   const [colWidths, setColWidths] = useState<number[]>([]);
   const [rowHeightOverrides, setRowHeightOverrides] = useState<Array<number | null>>([]);
   const [findText, setFindText] = useState("");
@@ -910,6 +912,19 @@ export function App() {
     setZoom(1);
   }, []);
 
+  const toggleMagnifier = useCallback(() => {
+    setMagnifierEnabled((current) => {
+      const next = !current;
+      setStatus(next ? "已开启放大镜，悬停或选中文本查看 2x 放大。" : "已关闭放大镜。");
+      return next;
+    });
+  }, []);
+
+  const disableMagnifier = useCallback(() => {
+    setMagnifierEnabled(false);
+    setStatus("已关闭放大镜。");
+  }, []);
+
   const selectColumn = useCallback(
     (colIndex: number) => {
       const point = { row: 0, col: colIndex };
@@ -1029,6 +1044,13 @@ export function App() {
         <button type="button" title="缩小表格" onClick={() => changeZoom(-ZOOM_STEP)}>－</button>
         <button type="button" title="恢复 100% 缩放" onClick={resetZoom}>{Math.round(zoom * 100)}%</button>
         <button type="button" title="放大表格" onClick={() => changeZoom(ZOOM_STEP)}>＋</button>
+        <button
+          type="button"
+          title="开启后悬停文本框、单元格或手动选中文本可查看 2x 放大镜"
+          onClick={toggleMagnifier}
+        >
+          {magnifierEnabled ? "关闭放大镜" : "放大镜"}
+        </button>
         <span className="status">
           {activeLabel} · {selectedSize}
           {activeCell ? ` · ${activeCell.tag}` : ""}
@@ -1141,6 +1163,8 @@ export function App() {
           {menuButton("清除 class", clearClass)}
         </div>
       )}
+
+      <TextMagnifier enabled={magnifierEnabled} onRequestDisable={disableMagnifier} />
 
       <div className={`source-panel ${sourceOpen ? "is-open" : ""}`}>
         <div className="source-toolbar">

@@ -1,4 +1,5 @@
 import { mkdir, rm, writeFile } from "node:fs/promises";
+import { resolve } from "node:path";
 import esbuild from "esbuild";
 
 const production = process.env.NODE_ENV !== "development";
@@ -15,6 +16,7 @@ await esbuild.build({
   format: "esm",
   target: "es2020",
   jsx: "automatic",
+  nodePaths: [resolve("node_modules")],
   sourcemap: !production,
   minify: production,
   loader: {
