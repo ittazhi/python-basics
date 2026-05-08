@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>文本放大镜</title>
+    <link rel="stylesheet" href="popup.css">
+  </head>
+  <body>
+    <main>
+      <header>
+        <h1>文本放大镜</h1>
+      </header>
+
+      <section class="panel">
+        <div class="switch-row">
+          <div>
+            <strong>当前标签页</strong>
+          </div>
+          <label class="toggle" aria-label="开启文本放大镜">
+            <input id="enabled-toggle" type="checkbox">
+            <span></span>
+          </label>
+        </div>
+
+        <div id="status" class="status" data-state="idle">正在读取当前页面状态...</div>
+      </section>
+
+      <section class="panel settings">
+        <label class="range-row" for="zoom-range">
+          <span>放大倍数</span>
+          <strong id="zoom-value">2.2×</strong>
+        </label>
+        <input id="zoom-range" type="range" min="1.5" max="4" step="0.1">
+
+        <label class="range-row" for="width-range">
+          <span>窗口宽度</span>
+          <strong id="width-value">380 px</strong>
+        </label>
+        <input id="width-range" type="range" min="280" max="620" step="20">
+
+        <label class="checkbox-row">
+          <input id="field-toggle" type="checkbox">
+          <span>输入框没有选区时，放大整个输入内容</span>
+        </label>
+      </section>
+    </main>
+
+    <script src="popup.js"></script>
+  </body>
+</html>
