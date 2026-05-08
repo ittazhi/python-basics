@@ -1,7 +1,7 @@
 import { createReadStream, existsSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
-import { extname, join, normalize } from "node:path";
+import { extname, join, normalize, resolve } from "node:path";
 import esbuild from "esbuild";
 
 const host = "127.0.0.1";
@@ -35,6 +35,7 @@ const context = await esbuild.context({
   format: "esm",
   target: "es2020",
   jsx: "automatic",
+  nodePaths: [resolve("node_modules")],
   sourcemap: true,
   loader: {
     ".css": "css",

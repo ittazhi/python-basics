@@ -28,7 +28,7 @@ import {
   serializeTableModel,
   TableParseError,
 } from "./tableHtml";
-import { TextMagnifier } from "./text-magnifier/TextMagnifier";
+import { TextMagnifier } from "../../text_magnifier/TextMagnifier";
 import type { CellSelection, GridOrigin, TableCellModel, TableGrid, TableModel } from "./types";
 
 type GridPoint = { row: number; col: number };
