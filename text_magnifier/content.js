@@ -1,6 +1,8 @@
 (function () {
   "use strict";
 
+  if (window.__textMagnifierExtensionApi) return;
+
   var SCALE = 2;
   var LENS_WIDTH = 260;
   var LENS_HEIGHT = 120;
@@ -190,6 +192,17 @@
     }
   }
 
+  window.__textMagnifierExtensionApi = {
+    toggle: function () {
+      setEnabled(!enabled);
+      return enabled;
+    },
+    setEnabled: function (nextEnabled) {
+      setEnabled(Boolean(nextEnabled));
+      return enabled;
+    }
+  };
+
   button.addEventListener("click", function (event) {
     event.preventDefault();
     event.stopPropagation();
@@ -226,4 +239,15 @@
       setEnabled(false);
     }
   }, true);
+
+  if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.onMessage) {
+    chrome.runtime.onMessage.addListener(function (message, _sender, sendResponse) {
+      if (!message || message.type !== "TEXT_MAGNIFIER_TOGGLE") return false;
+
+      var nextEnabled = typeof message.enabled === "boolean" ? message.enabled : !enabled;
+      setEnabled(nextEnabled);
+      sendResponse({ enabled: enabled });
+      return true;
+    });
+  }
 })();
