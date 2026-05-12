@@ -10,6 +10,7 @@
   const UPDATE_DELAY_MS = 80;
   const FOCUS_OUT_DELAY_MS = 120;
   const MAX_TEXT_LENGTH = 6000;
+  const PASSIVE_CAPTURE = { capture: true, passive: true };
   const TEXT_INPUT_TYPES = new Set([
     "text",
     "search",
@@ -38,9 +39,11 @@
     updateTimer: null,
     hideTimer: null,
     toastTimer: null,
+    repositionFrame: 0,
     lastPointer: { x: window.innerWidth / 2, y: window.innerHeight / 2 },
     lastAnchorRect: null,
     currentSignature: "",
+    renderedSignature: "",
     closedSignature: ""
   };
 
@@ -100,9 +103,8 @@
       document.addEventListener("focusin", handleFocusIn, true);
       document.addEventListener("focusout", handleFocusOut, true);
       document.addEventListener("input", handleInput, true);
-      document.addEventListener("pointermove", handlePointerMove, true);
-      window.addEventListener("scroll", handleViewportChange, true);
-      window.addEventListener("resize", handleViewportChange, true);
+      window.addEventListener("scroll", handleViewportChange, PASSIVE_CAPTURE);
+      window.addEventListener("resize", handleViewportChange, PASSIVE_CAPTURE);
       queueUpdate(0);
       showToast("文本放大镜已开启");
       return;
@@ -115,9 +117,8 @@
     document.removeEventListener("focusin", handleFocusIn, true);
     document.removeEventListener("focusout", handleFocusOut, true);
     document.removeEventListener("input", handleInput, true);
-    document.removeEventListener("pointermove", handlePointerMove, true);
-    window.removeEventListener("scroll", handleViewportChange, true);
-    window.removeEventListener("resize", handleViewportChange, true);
+    window.removeEventListener("scroll", handleViewportChange, PASSIVE_CAPTURE);
+    window.removeEventListener("resize", handleViewportChange, PASSIVE_CAPTURE);
     clearTimers();
     hidePanel();
     showToast("文本放大镜已关闭");
@@ -137,7 +138,7 @@
     if (state.panel) {
       applyPanelSettings();
       if (state.lastAnchorRect) {
-        positionPanel(state.lastAnchorRect);
+        queuePositionUpdate(state.lastAnchorRect);
       }
     }
   }
@@ -157,6 +158,7 @@
 
   function handleMouseUp(event) {
     if (event.button === 0) {
+      state.lastPointer = { x: event.clientX, y: event.clientY };
       queueUpdate(0);
     }
   }
@@ -189,13 +191,9 @@
     queueUpdate(UPDATE_DELAY_MS);
   }
 
-  function handlePointerMove(event) {
-    state.lastPointer = { x: event.clientX, y: event.clientY };
-  }
-
   function handleViewportChange() {
-    if (state.panel && state.lastAnchorRect) {
-      positionPanel(state.lastAnchorRect);
+    if (isPanelVisible()) {
+      queueUpdate(UPDATE_DELAY_MS);
     }
   }
 
@@ -230,7 +228,13 @@
       return;
     }
 
-    renderPanel(content);
+    state.lastAnchorRect = content.anchorRect || null;
+    if (signature === state.renderedSignature && isPanelVisible()) {
+      queuePositionUpdate(content.anchorRect);
+      return;
+    }
+
+    renderPanel(content, signature);
   }
 
   function getCurrentContent() {
@@ -365,10 +369,15 @@
   }
 
   function buildSignature(content) {
-    return `${content.source}:${content.text.length}:${content.text.slice(0, 240)}`;
+    return [
+      content.source,
+      content.text.length,
+      content.text.slice(0, 240),
+      content.text.slice(-160)
+    ].join(":");
   }
 
-  function renderPanel(content) {
+  function renderPanel(content, signature) {
     const panel = ensurePanel();
     const title = panel.querySelector(".codex-text-magnifier__title");
     const body = panel.querySelector(".codex-text-magnifier__body");
@@ -376,12 +385,11 @@
     title.textContent = content.title;
     body.textContent = content.text;
     state.lastAnchorRect = content.anchorRect || null;
+    state.renderedSignature = signature;
     applyPanelSettings();
 
     panel.dataset.visible = "true";
-    window.requestAnimationFrame(() => {
-      positionPanel(content.anchorRect);
-    });
+    queuePositionUpdate(content.anchorRect);
   }
 
   function ensurePanel() {
@@ -460,6 +468,21 @@
     panel.style.top = `${Math.round(top)}px`;
   }
 
+  function queuePositionUpdate(anchorRect) {
+    if (anchorRect) {
+      state.lastAnchorRect = anchorRect;
+    }
+
+    if (state.repositionFrame) {
+      return;
+    }
+
+    state.repositionFrame = window.requestAnimationFrame(() => {
+      state.repositionFrame = 0;
+      positionPanel(state.lastAnchorRect);
+    });
+  }
+
   function getUsableRect(rect) {
     if (!rect) {
       return null;
@@ -490,6 +513,7 @@
     }
 
     state.panel.dataset.visible = "false";
+    state.renderedSignature = "";
   }
 
   function showToast(message) {
@@ -518,8 +542,16 @@
   function clearTimers() {
     window.clearTimeout(state.updateTimer);
     window.clearTimeout(state.hideTimer);
+    if (state.repositionFrame) {
+      window.cancelAnimationFrame(state.repositionFrame);
+    }
     state.updateTimer = null;
     state.hideTimer = null;
+    state.repositionFrame = 0;
+  }
+
+  function isPanelVisible() {
+    return Boolean(state.panel && state.panel.dataset.visible === "true");
   }
 
   function isTextInput(element) {
