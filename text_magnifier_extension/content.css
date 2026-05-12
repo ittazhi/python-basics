@@ -1,6 +1,7 @@
 #codex-text-magnifier {
   --codex-text-magnifier-width: 380px;
   --codex-text-magnifier-zoom: 2.2;
+  --codex-text-magnifier-radius: 42px;
   position: fixed;
   top: 12px;
   left: 12px;
@@ -12,23 +13,26 @@
   overflow: hidden;
   isolation: isolate;
   contain: layout paint style;
-  border: 1px solid rgba(255, 255, 255, 0.62);
-  border-radius: 18px;
+  border: 1px solid rgba(230, 246, 255, 0.82);
+  border-radius: var(--codex-text-magnifier-radius);
   background:
-    radial-gradient(circle at 18% 0%, rgba(255, 255, 255, 0.92) 0%, rgba(255, 255, 255, 0.42) 28%, transparent 52%),
-    linear-gradient(145deg, rgba(255, 255, 255, 0.72), rgba(229, 244, 255, 0.42) 46%, rgba(255, 255, 255, 0.54)),
-    rgba(246, 251, 255, 0.5);
-  color: #101722;
+    radial-gradient(ellipse at 28% 0%, rgba(255, 255, 255, 0.74) 0%, rgba(255, 255, 255, 0.2) 22%, transparent 50%),
+    radial-gradient(ellipse at 82% 100%, rgba(168, 221, 255, 0.2), transparent 44%),
+    linear-gradient(160deg, rgba(236, 248, 255, 0.34), rgba(13, 24, 37, 0.54) 50%, rgba(232, 246, 255, 0.2)),
+    rgba(9, 18, 30, 0.42);
+  color: #f5fbff;
   box-shadow:
-    0 24px 64px rgba(14, 24, 39, 0.24),
-    0 4px 18px rgba(88, 124, 166, 0.1),
-    inset 0 1px 0 rgba(255, 255, 255, 0.86),
-    inset 0 -1px 0 rgba(29, 47, 73, 0.08);
-  backdrop-filter: blur(16px) saturate(1.65) contrast(1.04);
-  -webkit-backdrop-filter: blur(16px) saturate(1.65) contrast(1.04);
+    0 26px 72px rgba(0, 8, 20, 0.42),
+    0 0 38px rgba(154, 213, 255, 0.16),
+    inset 0 1px 0 rgba(255, 255, 255, 0.92),
+    inset 0 -1px 0 rgba(255, 255, 255, 0.38),
+    inset 18px 0 30px rgba(255, 255, 255, 0.14),
+    inset -18px 0 30px rgba(0, 12, 28, 0.28);
+  backdrop-filter: blur(18px) saturate(1.8) contrast(1.08) brightness(1.04);
+  -webkit-backdrop-filter: blur(18px) saturate(1.8) contrast(1.08) brightness(1.04);
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   opacity: 0;
-  transform: translateY(4px) scale(0.99);
+  transform: translateY(5px) scale(0.985);
   transform-origin: top center;
   transition: opacity 100ms ease, transform 100ms ease;
   pointer-events: none;
@@ -41,9 +45,10 @@
   z-index: 0;
   border-radius: inherit;
   background:
-    linear-gradient(118deg, rgba(255, 255, 255, 0.82) 0%, rgba(255, 255, 255, 0.2) 29%, transparent 55%);
+    linear-gradient(110deg, rgba(255, 255, 255, 0.9) 0%, rgba(255, 255, 255, 0.22) 18%, transparent 44%),
+    radial-gradient(ellipse at 50% 0%, rgba(183, 227, 255, 0.76) 0%, rgba(183, 227, 255, 0.22) 22%, transparent 58%);
   mix-blend-mode: screen;
-  opacity: 0.9;
+  opacity: 0.86;
   pointer-events: none;
 }
 
@@ -52,15 +57,18 @@
   position: absolute;
   inset: 1px;
   z-index: 0;
-  border-radius: 17px;
+  border-radius: calc(var(--codex-text-magnifier-radius) - 1px);
   background:
-    radial-gradient(circle at 92% 12%, rgba(134, 210, 255, 0.24), transparent 24%),
-    radial-gradient(circle at 12% 96%, rgba(255, 255, 255, 0.32), transparent 26%),
-    linear-gradient(180deg, transparent 62%, rgba(255, 255, 255, 0.18));
+    linear-gradient(180deg, rgba(255, 255, 255, 0.16), transparent 30%, rgba(255, 255, 255, 0.1) 100%),
+    radial-gradient(ellipse at 50% 4%, rgba(214, 240, 255, 0.64) 0%, rgba(214, 240, 255, 0.16) 22%, transparent 48%),
+    radial-gradient(ellipse at 2% 42%, rgba(255, 255, 255, 0.38), transparent 20%),
+    radial-gradient(ellipse at 98% 48%, rgba(255, 255, 255, 0.2), transparent 18%);
   box-shadow:
-    inset 0 0 0 1px rgba(255, 255, 255, 0.18),
-    inset 0 18px 28px rgba(255, 255, 255, 0.18);
-  opacity: 0.82;
+    inset 0 0 0 1px rgba(255, 255, 255, 0.46),
+    inset 0 0 18px rgba(235, 249, 255, 0.42),
+    inset 0 24px 30px rgba(255, 255, 255, 0.16),
+    inset 0 -24px 30px rgba(0, 10, 24, 0.18);
+  opacity: 0.94;
   pointer-events: none;
 }
 
@@ -77,11 +85,19 @@
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  min-height: 36px;
-  padding: 8px 10px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.5);
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.42), rgba(255, 255, 255, 0.18));
-  color: #243044;
+  min-height: 42px;
+  margin: 12px 14px 0;
+  padding: 8px 12px 8px 16px;
+  border: 1px solid rgba(126, 186, 255, 0.42);
+  border-radius: 18px;
+  background:
+    linear-gradient(180deg, rgba(59, 142, 255, 0.76), rgba(0, 91, 218, 0.68)),
+    rgba(0, 90, 210, 0.58);
+  color: #ffffff;
+  box-shadow:
+    0 7px 18px rgba(0, 78, 180, 0.28),
+    inset 0 1px 0 rgba(255, 255, 255, 0.38),
+    inset 0 -1px 0 rgba(0, 20, 82, 0.18);
   font-size: 12px;
   font-weight: 650;
   line-height: 1.2;
@@ -99,38 +115,40 @@
   place-items: center;
   width: 24px;
   height: 24px;
-  border: 1px solid rgba(255, 255, 255, 0.55);
+  border: 1px solid rgba(255, 255, 255, 0.34);
   border-radius: 999px;
   background:
-    linear-gradient(145deg, rgba(255, 255, 255, 0.86), rgba(230, 243, 255, 0.48)),
-    rgba(255, 255, 255, 0.56);
-  color: #1c2433;
+    linear-gradient(145deg, rgba(255, 255, 255, 0.34), rgba(255, 255, 255, 0.08)),
+    rgba(255, 255, 255, 0.16);
+  color: #ffffff;
   font: 18px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  box-shadow: 0 3px 12px rgba(20, 29, 43, 0.12);
+  box-shadow: 0 3px 12px rgba(0, 32, 92, 0.18);
   cursor: pointer;
 }
 
 .codex-text-magnifier__close:hover {
-  background: rgba(255, 255, 255, 0.82);
+  background: rgba(255, 255, 255, 0.28);
 }
 
 .codex-text-magnifier__body {
   position: relative;
   z-index: 1;
   overflow: auto;
-  padding: 14px;
+  padding: 16px 22px 22px;
   font-size: calc(16px * var(--codex-text-magnifier-zoom));
-  line-height: 1.35;
+  line-height: 1.42;
   letter-spacing: 0;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   word-break: break-word;
+  color: rgba(246, 250, 255, 0.9);
+  text-shadow: 0 1px 6px rgba(0, 0, 0, 0.42);
   user-select: text;
 }
 
 @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
   #codex-text-magnifier {
-    background: rgba(250, 253, 255, 0.96);
+    background: rgba(21, 31, 44, 0.96);
   }
 }
 
