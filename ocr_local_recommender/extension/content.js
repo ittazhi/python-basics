@@ -45,10 +45,15 @@
     suggestionTimer: null,
     captureTimer: null,
     publishTimer: null,
+    viewportFrame: null,
     suggestionSequence: 0,
     lastSnapshot: null,
     lastSnapshotSignature: "",
     lastCommitSignature: "",
+    snapshotCache: null,
+    contextVersion: 0,
+    lastShowSignature: "",
+    lastShowAt: 0,
     acceptedCandidate: null,
     uiPositions: {
       popover: null,
@@ -66,6 +71,8 @@
     labels: 160,
     frames: 20
   };
+  const SNAPSHOT_CACHE_MAX_AGE_MS = 2000;
+  const SHOW_FEEDBACK_DEDUPE_MS = 1500;
 
   chrome.runtime.onMessage.addListener((message) => {
     if (message?.type !== "ocr-assist:config-changed") {
@@ -133,7 +140,12 @@
         return;
       }
       if (state.isTopFrame) {
-        if (state.activeTarget && document.contains(state.activeTarget)) {
+        if (
+          state.activeTarget &&
+          document.contains(state.activeTarget) &&
+          records.some(mutationMayAffectSnapshot)
+        ) {
+          invalidateSnapshotCache();
           scheduleSnapshotCapture("mutation", 900);
         }
       } else {
@@ -157,6 +169,11 @@
     state.observer = null;
   }
 
+  function invalidateSnapshotCache() {
+    state.contextVersion += 1;
+    state.snapshotCache = null;
+  }
+
   function isInternalMutation(record) {
     if (!state.ui?.root) {
       return false;
@@ -166,6 +183,25 @@
     }
     const nodes = [...record.addedNodes, ...record.removedNodes];
     return nodes.length > 0 && nodes.every((node) => node === state.ui.root || state.ui.root.contains(node));
+  }
+
+  function mutationMayAffectSnapshot(record) {
+    if (!(record.target instanceof Element)) {
+      return true;
+    }
+    if (record.target.closest(CONTAINER_SELECTORS)) {
+      return true;
+    }
+    const relevantSelector = `${CONTAINER_SELECTORS}, ${EDITABLE_SELECTOR}, h1, h2, h3, h4, legend, label, iframe, [role='tab']`;
+    for (const node of [...record.addedNodes, ...record.removedNodes]) {
+      if (!(node instanceof Element)) {
+        continue;
+      }
+      if (node.matches(relevantSelector) || node.querySelector(relevantSelector)) {
+        return true;
+      }
+    }
+    return false;
   }
 
   function createUi() {
@@ -262,6 +298,9 @@
       return;
     }
 
+    if (state.activeTarget !== event.target) {
+      invalidateSnapshotCache();
+    }
     state.activeTarget = event.target;
     state.acceptedCandidate = null;
     ensureDomObserver();
@@ -322,8 +361,13 @@
       return;
     }
     if (state.isTopFrame) {
-      positionPopover();
-      applyPanelPosition("sidebar");
+      if (!state.viewportFrame) {
+        state.viewportFrame = window.requestAnimationFrame(() => {
+          state.viewportFrame = null;
+          positionPopover();
+          applyPanelPosition("sidebar");
+        });
+      }
       if (state.activeTarget && document.contains(state.activeTarget)) {
         scheduleSnapshotCapture("viewport", 900);
       }
@@ -336,6 +380,7 @@
     state.lastSnapshot = null;
     state.lastSnapshotSignature = "";
     state.lastCommitSignature = "";
+    invalidateSnapshotCache();
     state.suggestions = [];
     state.selectedIndex = 0;
     state.acceptedCandidate = null;
@@ -523,6 +568,7 @@
     }
 
     state.lastSnapshot = snapshot;
+    state.lastSnapshotSignature = snapshotSignature(snapshot);
     state.suggestions = response.data.suggestions || [];
     state.selectedIndex = 0;
     renderSuggestions();
@@ -530,14 +576,29 @@
 
     if (state.suggestions.length) {
       setStatus(`${state.suggestions.length} suggestions`);
-      void apiRequest("/feedback", "POST", {
-        event_type: "show",
-        candidate_ids: state.suggestions.map((item) => item.candidate_id),
-        payload: { reason }
-      });
+      maybeReportShownSuggestions(reason);
     } else {
       setStatus(snapshot.current_input ? "No matching history" : "No high-confidence candidate");
     }
+  }
+
+  function maybeReportShownSuggestions(reason) {
+    const candidateIds = state.suggestions.map((item) => item.candidate_id).filter(Boolean);
+    if (!candidateIds.length) {
+      return;
+    }
+    const signature = `${candidateIds.join(",")}|${state.lastSnapshotSignature}`;
+    const now = Date.now();
+    if (signature === state.lastShowSignature && now - state.lastShowAt < SHOW_FEEDBACK_DEDUPE_MS) {
+      return;
+    }
+    state.lastShowSignature = signature;
+    state.lastShowAt = now;
+    void apiRequest("/feedback", "POST", {
+      event_type: "show",
+      candidate_ids: candidateIds,
+      payload: { reason }
+    });
   }
 
   async function commitCurrentValue(source) {
@@ -708,6 +769,20 @@
       ? state.activeTarget
       : (isTrackableEditable(document.activeElement) ? document.activeElement : null);
     const active = extractActiveTarget(activeTarget);
+    const pageIdentity = extractPageIdentity();
+    const cached = state.snapshotCache;
+    if (
+      cached &&
+      cached.target === activeTarget &&
+      cached.contextVersion === state.contextVersion &&
+      cached.pageIdentity === pageIdentity &&
+      cached.targetLabelType === active.labelType &&
+      cached.targetRegion === active.region &&
+      Date.now() - cached.createdAt <= SNAPSHOT_CACHE_MAX_AGE_MS
+    ) {
+      return snapshotFromCachedContext(cached, active);
+    }
+
     const localLabels = extractVisibleLabels(activeTarget);
     const localNeighborTexts = extractNeighborTexts(activeTarget);
     const unreadableFrames = collectUnreadableFrames();
@@ -735,19 +810,61 @@
         label.order
       ].join("|");
     }).slice(0, SNAPSHOT_LIMITS.labels);
+    const labelTypeCounts = countLabelTypes(dedupedLabels);
+    const neighborTexts = dedupeItems(mergedNeighborTexts, (item) => normalizeText(item)).slice(0, 20);
+    const unreadableFrameList = dedupeItems(unreadableFrames, (item) => item).slice(0, 8);
 
+    state.snapshotCache = {
+      target: activeTarget,
+      contextVersion: state.contextVersion,
+      createdAt: Date.now(),
+      siteId: location.host || "generic-ocr-site",
+      pageIdentity,
+      targetLabelType: active.labelType,
+      targetRegion: active.region,
+      visibleLabels: dedupedLabels,
+      labelTypeCounts,
+      neighborTexts,
+      unreadableFrames: unreadableFrameList
+    };
+
+    return snapshotFromCachedContext(state.snapshotCache, active);
+  }
+
+  function snapshotFromCachedContext(cached, active) {
     return {
-      site_id: location.host || "generic-ocr-site",
-      page_identity: extractPageIdentity(),
+      site_id: cached.siteId,
+      page_identity: cached.pageIdentity,
       target_label_type: active.labelType,
       target_region: active.region,
       current_input: active.currentInput,
-      visible_labels: dedupedLabels,
-      label_type_counts: countLabelTypes(dedupedLabels),
-      neighbor_texts: dedupeItems(mergedNeighborTexts, (item) => normalizeText(item)).slice(0, 20),
-      unreadable_frames: dedupeItems(unreadableFrames, (item) => item).slice(0, 8),
+      visible_labels: applyActiveValueToLabels(cached.visibleLabels, active),
+      label_type_counts: cached.labelTypeCounts,
+      neighbor_texts: cached.neighborTexts,
+      unreadable_frames: cached.unreadableFrames,
       captured_at: new Date().toISOString()
     };
+  }
+
+  function applyActiveValueToLabels(labels, active) {
+    const activeLabelKey = normalizeText(active.labelType);
+    const activeRegionKey = normalizeText(active.region);
+    let updated = false;
+    return labels.map((label) => {
+      if (
+        !updated &&
+        activeLabelKey &&
+        normalizeText(label.label_type) === activeLabelKey &&
+        (!activeRegionKey || !label.region || normalizeText(label.region) === activeRegionKey)
+      ) {
+        updated = true;
+        return {
+          ...label,
+          value: active.currentInput
+        };
+      }
+      return { ...label };
+    });
   }
 
   function extractVisibleLabels(activeTarget) {

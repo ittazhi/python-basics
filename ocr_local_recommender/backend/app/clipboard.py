@@ -21,14 +21,14 @@ class ClipboardWatcher:
 
     def _resolve_poll_interval(self, poll_interval: float | None) -> float:
         if poll_interval is not None:
-            return max(1.5, float(poll_interval))
+            return max(3.0, float(poll_interval))
         raw_interval = os.getenv("OCR_RECOMMENDER_CLIPBOARD_INTERVAL", "").strip()
         if raw_interval:
             try:
-                return max(1.5, float(raw_interval))
+                return max(3.0, float(raw_interval))
             except ValueError:
                 pass
-        return 3.0
+        return 8.0
 
     def start(self) -> bool:
         if not self.enabled or self._thread is not None:

@@ -10,6 +10,7 @@ from typing import Any, Optional
 from .models import FeedbackRequest, SampleSnapshotPayload
 from .normalization import (
     build_context_terms,
+    canonical_label_type,
     count_label_types,
     normalize_text,
     simplify_display_text,
@@ -45,6 +46,8 @@ class Storage:
                 conn.execute("PRAGMA journal_mode=WAL")
                 conn.execute("PRAGMA synchronous=NORMAL")
                 conn.execute("PRAGMA foreign_keys=ON")
+                conn.execute("PRAGMA temp_store=MEMORY")
+                conn.execute("PRAGMA cache_size=-20000")
             self._setup_memory_db()
             self._setup_history_db()
 
@@ -71,11 +74,17 @@ class Storage:
               candidate_id INTEGER NOT NULL REFERENCES candidate_value(id) ON DELETE CASCADE,
               source_kind TEXT NOT NULL,
               source_label_type TEXT DEFAULT '',
+              source_label_key TEXT DEFAULT '',
               source_region TEXT DEFAULT '',
               source_attr TEXT DEFAULT '',
               sample_snapshot_id TEXT DEFAULT '',
               page_identity TEXT DEFAULT '',
               context_terms_json TEXT NOT NULL DEFAULT '[]',
+              label_type_counts_json TEXT NOT NULL DEFAULT '{}',
+              visible_label_keys_json TEXT NOT NULL DEFAULT '[]',
+              label_sequence_json TEXT NOT NULL DEFAULT '[]',
+              label_values_json TEXT NOT NULL DEFAULT '[]',
+              neighbor_terms_json TEXT NOT NULL DEFAULT '[]',
               created_at TEXT NOT NULL
             );
 
@@ -97,6 +106,21 @@ class Storage:
               label_types,
               context_terms
             );
+            """
+        )
+        self._ensure_memory_columns()
+        self.memory_conn.executescript(
+            """
+            CREATE INDEX IF NOT EXISTS idx_candidate_value_tier_seen
+              ON candidate_value(tier, last_seen_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_candidate_stats_blacklist_rank
+              ON candidate_stats(blacklisted, accept_count DESC, last_used_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_candidate_source_candidate_created
+              ON candidate_source(candidate_id, created_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_candidate_source_label_candidate
+              ON candidate_source(source_label_key, candidate_id);
+            CREATE INDEX IF NOT EXISTS idx_candidate_source_page_candidate
+              ON candidate_source(page_identity, candidate_id);
             """
         )
         self.memory_conn.commit()
@@ -137,9 +161,52 @@ class Storage:
               payload_json TEXT NOT NULL,
               created_at TEXT NOT NULL
             );
+
+            CREATE INDEX IF NOT EXISTS idx_sample_snapshot_captured
+              ON sample_snapshot(captured_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_raw_capture_normalized
+              ON raw_capture(normalized_text);
+            CREATE INDEX IF NOT EXISTS idx_event_log_created
+              ON event_log(created_at DESC);
             """
         )
         self.history_conn.commit()
+
+    def _ensure_memory_columns(self) -> None:
+        existing_columns = {
+            row["name"]
+            for row in self.memory_conn.execute("PRAGMA table_info(candidate_source)").fetchall()
+        }
+        column_defs = {
+            "source_label_key": "TEXT DEFAULT ''",
+            "label_type_counts_json": "TEXT NOT NULL DEFAULT '{}'",
+            "visible_label_keys_json": "TEXT NOT NULL DEFAULT '[]'",
+            "label_sequence_json": "TEXT NOT NULL DEFAULT '[]'",
+            "label_values_json": "TEXT NOT NULL DEFAULT '[]'",
+            "neighbor_terms_json": "TEXT NOT NULL DEFAULT '[]'",
+        }
+        for column_name, column_type in column_defs.items():
+            if column_name not in existing_columns:
+                self.memory_conn.execute(f"ALTER TABLE candidate_source ADD COLUMN {column_name} {column_type}")
+        rows = self.memory_conn.execute(
+            """
+            SELECT id, source_label_type
+            FROM candidate_source
+            WHERE source_label_key = '' AND source_label_type != ''
+            """
+        ).fetchall()
+        self.memory_conn.executemany(
+            "UPDATE candidate_source SET source_label_key = ? WHERE id = ?",
+            self._source_label_key_backfill_rows(rows),
+        )
+
+    def _source_label_key_backfill_rows(self, rows: list[sqlite3.Row]) -> list[tuple[str, int]]:
+        backfill_rows: list[tuple[str, int]] = []
+        for row in rows:
+            label_key = canonical_label_type(row["source_label_type"])
+            if label_key:
+                backfill_rows.append((label_key, int(row["id"])))
+        return backfill_rows
 
     def store_snapshot(self, snapshot: SampleSnapshotPayload) -> str:
         with self._lock:
@@ -292,16 +359,20 @@ class Storage:
 
             context_terms = build_context_terms(sample_snapshot)
             source_label_type = sample_snapshot.target_label_type if sample_snapshot else ""
+            source_label_key = canonical_label_type(source_label_type)
             source_region = sample_snapshot.target_region if sample_snapshot else ""
             source_attr = ""
             page_identity = sample_snapshot.page_identity if sample_snapshot else ""
+            source_features = self._source_features(sample_snapshot)
             self.memory_conn.execute(
                 """
                 INSERT INTO candidate_source (
                   candidate_id, source_kind, source_label_type, source_region, source_attr,
-                  sample_snapshot_id, page_identity, context_terms_json, created_at
+                  sample_snapshot_id, page_identity, context_terms_json, created_at,
+                  source_label_key, label_type_counts_json, visible_label_keys_json,
+                  label_sequence_json, label_values_json, neighbor_terms_json
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     candidate_id,
@@ -313,6 +384,12 @@ class Storage:
                     page_identity,
                     _json_dump(context_terms),
                     now,
+                    source_label_key,
+                    _json_dump(source_features["label_type_counts"]),
+                    _json_dump(source_features["visible_label_keys"]),
+                    _json_dump(source_features["label_sequence"]),
+                    _json_dump(source_features["label_values"]),
+                    _json_dump(source_features["neighbor_terms"]),
                 ),
             )
             self.memory_conn.execute(
@@ -506,6 +583,8 @@ class Storage:
         include_blacklisted: bool = False,
         limit: int | None = None,
         sources_per_candidate: int = 6,
+        preferred_label_key: str = "",
+        preferred_page_identity: str = "",
     ) -> list[dict[str, Any]]:
         with self._lock:
             params: list[Any] = []
@@ -523,6 +602,31 @@ class Storage:
             if limit is not None:
                 limit_clause = "LIMIT ?"
                 params.append(max(1, int(limit)))
+            preferred_label_key = canonical_label_type(preferred_label_key)
+            preferred_page_identity = preferred_page_identity.strip()
+            label_hit_expr = "0"
+            page_hit_expr = "0"
+            order_params: list[Any] = []
+            if preferred_label_key:
+                label_hit_expr = """
+                  EXISTS (
+                    SELECT 1
+                    FROM candidate_source src
+                    WHERE src.candidate_id = cv.id
+                      AND src.source_label_key = ?
+                  )
+                """
+                order_params.append(preferred_label_key)
+            if preferred_page_identity:
+                page_hit_expr = """
+                  EXISTS (
+                    SELECT 1
+                    FROM candidate_source src
+                    WHERE src.candidate_id = cv.id
+                      AND src.page_identity = ?
+                  )
+                """
+                order_params.append(preferred_page_identity)
 
             rows = self.memory_conn.execute(
                 f"""
@@ -540,14 +644,16 @@ class Storage:
                   cs.edit_after_accept_count,
                   cs.blacklisted,
                   cs.last_shown_at,
-                  cs.last_used_at
+                  cs.last_used_at,
+                  {label_hit_expr} AS label_hit,
+                  {page_hit_expr} AS page_hit
                 FROM candidate_value cv
                 JOIN candidate_stats cs ON cs.candidate_id = cv.id
                 {where_clause}
-                ORDER BY cs.accept_count DESC, cv.last_seen_at DESC
+                ORDER BY label_hit DESC, page_hit DESC, cs.accept_count DESC, cv.last_seen_at DESC, cv.id DESC
                 {limit_clause}
                 """,
-                tuple(params),
+                tuple(order_params + params),
             ).fetchall()
             candidate_ids = [int(row["id"]) for row in rows]
             source_map = self._fetch_sources(candidate_ids, sources_per_candidate=sources_per_candidate)
@@ -614,6 +720,50 @@ class Storage:
                 for row in rows
             ]
 
+    def _source_features(self, snapshot: Optional[SampleSnapshotPayload]) -> dict[str, Any]:
+        if snapshot is None:
+            return {
+                "label_type_counts": {},
+                "visible_label_keys": [],
+                "label_sequence": [],
+                "label_values": [],
+                "neighbor_terms": [],
+            }
+
+        label_type_counts = snapshot.label_type_counts or count_label_types(snapshot.visible_labels)
+        visible_label_keys: list[str] = []
+        label_sequence: list[str] = []
+        label_values: list[str] = []
+        seen_label_keys: set[str] = set()
+        seen_values: set[str] = set()
+        for label in snapshot.visible_labels:
+            label_key = canonical_label_type(label.label_type)
+            if label_key:
+                label_sequence.append(label_key)
+                if label_key not in seen_label_keys:
+                    seen_label_keys.add(label_key)
+                    visible_label_keys.append(label_key)
+            normalized_value = normalize_text(label.value)
+            if normalized_value and normalized_value not in seen_values:
+                seen_values.add(normalized_value)
+                label_values.append(normalized_value)
+
+        neighbor_terms: list[str] = []
+        seen_neighbors: set[str] = set()
+        for text in snapshot.neighbor_texts:
+            normalized_neighbor = normalize_text(text)
+            if normalized_neighbor and normalized_neighbor not in seen_neighbors:
+                seen_neighbors.add(normalized_neighbor)
+                neighbor_terms.append(normalized_neighbor)
+
+        return {
+            "label_type_counts": label_type_counts,
+            "visible_label_keys": visible_label_keys,
+            "label_sequence": label_sequence,
+            "label_values": label_values,
+            "neighbor_terms": neighbor_terms,
+        }
+
     def _fetch_sources(self, candidate_ids: list[int], sources_per_candidate: int = 6) -> dict[int, list[dict[str, Any]]]:
         if not candidate_ids:
             return {}
@@ -627,11 +777,17 @@ class Storage:
               candidate_id,
               source_kind,
               source_label_type,
+              source_label_key,
               source_region,
               source_attr,
               sample_snapshot_id,
               page_identity,
               context_terms_json,
+              label_type_counts_json,
+              visible_label_keys_json,
+              label_sequence_json,
+              label_values_json,
+              neighbor_terms_json,
               created_at,
               ROW_NUMBER() OVER (PARTITION BY candidate_id ORDER BY created_at DESC) AS source_rank
             FROM candidate_source
@@ -647,23 +803,55 @@ class Storage:
                 row["sample_snapshot_id"]
                 for row in rows
                 if row["sample_snapshot_id"]
+                and not _json_load(row["label_sequence_json"], [])
+                and not _json_load(row["label_type_counts_json"], {})
             }
         )
         snapshot_map = self._fetch_snapshots(snapshot_ids)
         source_map: dict[int, list[dict[str, Any]]] = {candidate_id: [] for candidate_id in candidate_ids}
         for row in rows:
+            label_type_counts = _json_load(row["label_type_counts_json"], {})
+            visible_label_keys = _json_load(row["visible_label_keys_json"], [])
+            label_sequence = _json_load(row["label_sequence_json"], [])
+            label_values = _json_load(row["label_values_json"], [])
+            neighbor_terms = _json_load(row["neighbor_terms_json"], [])
+            sample_snapshot = snapshot_map.get(row["sample_snapshot_id"])
+            if sample_snapshot:
+                label_type_counts = label_type_counts or sample_snapshot.get("label_type_counts", {})
+                visible_label_keys = visible_label_keys or [
+                    canonical_label_type(label.get("label_type", ""))
+                    for label in sample_snapshot.get("visible_labels", [])
+                    if canonical_label_type(label.get("label_type", ""))
+                ]
+                label_sequence = label_sequence or visible_label_keys
+                label_values = label_values or [
+                    normalize_text(label.get("value", ""))
+                    for label in sample_snapshot.get("visible_labels", [])
+                    if normalize_text(label.get("value", ""))
+                ]
+                neighbor_terms = neighbor_terms or [
+                    normalize_text(text)
+                    for text in sample_snapshot.get("neighbor_texts", [])
+                    if normalize_text(text)
+                ]
             source_map[int(row["candidate_id"])].append(
                 {
                     "source_id": int(row["id"]),
                     "source_kind": row["source_kind"],
                     "source_label_type": row["source_label_type"],
+                    "source_label_key": row["source_label_key"] or canonical_label_type(row["source_label_type"]),
                     "source_region": row["source_region"],
                     "source_attr": row["source_attr"],
                     "page_identity": row["page_identity"],
                     "sample_snapshot_id": row["sample_snapshot_id"],
                     "context_terms": _json_load(row["context_terms_json"], []),
+                    "label_type_counts": label_type_counts,
+                    "visible_label_keys": visible_label_keys,
+                    "label_sequence": label_sequence,
+                    "label_values": label_values,
+                    "neighbor_terms": neighbor_terms,
                     "created_at": row["created_at"],
-                    "sample_snapshot": snapshot_map.get(row["sample_snapshot_id"]),
+                    "sample_snapshot": sample_snapshot,
                 }
             )
         return source_map
@@ -726,6 +914,8 @@ class Storage:
             SELECT source_label_type, context_terms_json
             FROM candidate_source
             WHERE candidate_id = ?
+            ORDER BY created_at DESC
+            LIMIT 160
             """,
             (candidate_id,),
         ).fetchall()
