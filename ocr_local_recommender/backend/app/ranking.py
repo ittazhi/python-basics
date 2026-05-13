@@ -185,18 +185,21 @@ class SuggestionEngine:
     ) -> list[dict[str, Any]]:
         normalized_query = normalize_text(query)
         include_weak = search_mode or bool(normalized_query)
-        # Fetch broadly, then rank in Python. This keeps light typo/missing-char
-        # tolerance from being defeated by a strict SQL substring prefilter.
-        candidate_limit = 700 if search_mode else 350
+        current_type = snapshot.target_label_type if snapshot else ""
+        current_canonical_type = canonical_label_type(current_type)
+        current_region = snapshot.target_region if snapshot else ""
+        current_page_identity = snapshot.page_identity if snapshot else ""
+        # Fetch a bounded, context-biased shortlist, then keep fuzzy ranking in
+        # Python so typo/missing-char tolerance is not defeated by strict SQL.
+        candidate_limit = 360 if search_mode else 180
         candidates = self.storage.fetch_candidate_bundles(
             include_weak=include_weak,
             query="",
             limit=candidate_limit,
-            sources_per_candidate=6,
+            sources_per_candidate=4,
+            preferred_label_key=current_canonical_type,
+            preferred_page_identity=current_page_identity,
         )
-        current_type = snapshot.target_label_type if snapshot else ""
-        current_canonical_type = canonical_label_type(current_type)
-        current_region = snapshot.target_region if snapshot else ""
         current_counts = (
             _canonical_counts(snapshot.label_type_counts or count_label_types(snapshot.visible_labels))
             if snapshot
@@ -373,7 +376,7 @@ class SuggestionEngine:
     ) -> tuple[float, list[str]]:
         score = 0.0
         reasons: list[str] = []
-        source_canonical_type = canonical_label_type(source.get("source_label_type", ""))
+        source_canonical_type = source.get("source_label_key") or canonical_label_type(source.get("source_label_type", ""))
         if current_canonical_type and source_canonical_type:
             if current_canonical_type == source_canonical_type:
                 score += 22.0
@@ -392,19 +395,20 @@ class SuggestionEngine:
                 reasons.append("same target region")
 
         sample_snapshot = source.get("sample_snapshot") or {}
-        source_counts = _canonical_counts(sample_snapshot.get("label_type_counts") or {})
+        source_counts = _canonical_counts(source.get("label_type_counts") or sample_snapshot.get("label_type_counts") or {})
         if current_counts and source_counts:
             overlap = _overlap_ratio(current_counts, source_counts)
             if overlap > 0:
                 score += overlap * 14.0
                 reasons.append("similar label distribution")
 
+        source_label_types = set(source.get("visible_label_keys") or [])
         source_labels = sample_snapshot.get("visible_labels") or []
-        source_label_types = set()
-        for label in source_labels:
-            label_type = canonical_label_type(label.get("label_type", ""))
-            if label_type:
-                source_label_types.add(label_type)
+        if not source_label_types:
+            for label in source_labels:
+                label_type = canonical_label_type(label.get("label_type", ""))
+                if label_type:
+                    source_label_types.add(label_type)
         if current_label_types and source_label_types:
             label_overlap = len(current_label_types & source_label_types) / max(
                 len(current_label_types | source_label_types), 1
@@ -413,7 +417,7 @@ class SuggestionEngine:
                 score += label_overlap * 10.0
                 reasons.append("overlapping label types")
 
-        source_sequence = _label_sequence(source_labels)
+        source_sequence = source.get("label_sequence") or _label_sequence(source_labels)
         count_similarity = _field_count_similarity(current_sequence, source_sequence)
         if count_similarity >= 0.8:
             score += count_similarity * 4.0
@@ -434,21 +438,25 @@ class SuggestionEngine:
             score += position_similarity * 12.0
             reasons.append("similar field position")
 
-        source_values = {
-            normalize_text(label.get("value", ""))
-            for label in source_labels
-            if normalize_text(label.get("value", ""))
-        }
+        source_values = set(source.get("label_values") or [])
+        if not source_values:
+            source_values = {
+                normalize_text(label.get("value", ""))
+                for label in source_labels
+                if normalize_text(label.get("value", ""))
+            }
         shared_values = current_label_values & source_values
         if shared_values:
             score += min(len(shared_values) * 4.0, 12.0)
             reasons.append("matching label contents")
 
-        source_neighbor_terms = {
-            normalize_text(text)
-            for text in (sample_snapshot.get("neighbor_texts") or [])
-            if normalize_text(text)
-        }
+        source_neighbor_terms = set(source.get("neighbor_terms") or [])
+        if not source_neighbor_terms:
+            source_neighbor_terms = {
+                normalize_text(text)
+                for text in (sample_snapshot.get("neighbor_texts") or [])
+                if normalize_text(text)
+            }
         neighbor_overlap = current_neighbors & source_neighbor_terms
         if neighbor_overlap:
             score += min(len(neighbor_overlap) * 3.0, 9.0)
@@ -532,7 +540,7 @@ class SuggestionEngine:
                     "page_identity": source.get("page_identity", ""),
                     "captured_at": source.get("created_at", ""),
                     "neighbor_texts": sample_snapshot.get("neighbor_texts", [])[:5],
-                    "label_type_counts": sample_snapshot.get("label_type_counts", {}),
+                    "label_type_counts": source.get("label_type_counts") or sample_snapshot.get("label_type_counts", {}),
                 }
             )
         return details

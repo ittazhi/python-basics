@@ -5,6 +5,7 @@ const DEFAULT_CONFIG = {
 };
 
 const frameSnapshotsByTab = new Map();
+let cachedConfig = null;
 
 chrome.runtime.onInstalled.addListener(() => {
   void ensureConfig();
@@ -56,19 +57,24 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 });
 
 async function ensureConfig() {
+  if (cachedConfig) {
+    return cachedConfig;
+  }
   const stored = await chrome.storage.local.get(CONFIG_KEY);
   if (!stored[CONFIG_KEY]) {
-    await chrome.storage.local.set({ [CONFIG_KEY]: DEFAULT_CONFIG });
+    cachedConfig = { ...DEFAULT_CONFIG };
+    await chrome.storage.local.set({ [CONFIG_KEY]: cachedConfig });
+    return cachedConfig;
   }
-}
-
-async function getConfig() {
-  await ensureConfig();
-  const stored = await chrome.storage.local.get(CONFIG_KEY);
-  return {
+  cachedConfig = {
     ...DEFAULT_CONFIG,
     ...(stored[CONFIG_KEY] || {})
   };
+  return cachedConfig;
+}
+
+async function getConfig() {
+  return ensureConfig();
 }
 
 async function setConfig(patch) {
@@ -76,6 +82,7 @@ async function setConfig(patch) {
     ...(await getConfig()),
     ...patch
   };
+  cachedConfig = nextConfig;
   await chrome.storage.local.set({ [CONFIG_KEY]: nextConfig });
   await broadcastConfig(nextConfig);
   return nextConfig;
