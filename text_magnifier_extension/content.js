@@ -44,7 +44,9 @@
     lastAnchorRect: null,
     currentSignature: "",
     renderedSignature: "",
-    closedSignature: ""
+    closedSignature: "",
+    currentText: "",
+    pinned: false
   };
 
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -121,6 +123,11 @@
     window.removeEventListener("resize", handleViewportChange, PASSIVE_CAPTURE);
     clearTimers();
     hidePanel();
+    state.currentSignature = "";
+    state.renderedSignature = "";
+    state.closedSignature = "";
+    state.currentText = "";
+    setPinned(false);
     showToast("文本放大镜已关闭");
   }
 
@@ -157,10 +164,16 @@
   }
 
   function handleMouseUp(event) {
-    if (event.button === 0) {
-      state.lastPointer = { x: event.clientX, y: event.clientY };
-      queueUpdate(0);
+    if (event.button !== 0) {
+      return;
     }
+
+    if (isPanelElement(event.target)) {
+      return;
+    }
+
+    state.lastPointer = { x: event.clientX, y: event.clientY };
+    queueUpdate(0);
   }
 
   function handleKeyUp() {
@@ -210,6 +223,19 @@
     state.updateTimer = null;
 
     if (!state.enabled) {
+      return;
+    }
+
+    if (isPanelElement(document.activeElement)) {
+      return;
+    }
+
+    const selection = window.getSelection();
+    if (
+      selection &&
+      !selection.isCollapsed &&
+      (isPanelElement(selection.anchorNode) || isPanelElement(selection.focusNode))
+    ) {
       return;
     }
 
@@ -384,6 +410,7 @@
 
     title.textContent = content.title;
     body.textContent = content.text;
+    state.currentText = content.text;
     state.lastAnchorRect = content.anchorRect || null;
     state.renderedSignature = signature;
     applyPanelSettings();
@@ -399,12 +426,21 @@
 
     const panel = document.createElement("div");
     panel.id = PANEL_ID;
-    panel.setAttribute("role", "dialog");
-    panel.setAttribute("aria-live", "polite");
+    panel.setAttribute("role", "region");
+    panel.setAttribute("aria-label", "文本放大镜");
+    panel.dataset.pinned = "false";
     panel.innerHTML = [
       '<div class="codex-text-magnifier__header">',
       '  <span class="codex-text-magnifier__title"></span>',
-      '  <button class="codex-text-magnifier__close" type="button" aria-label="关闭文本放大镜">×</button>',
+      '  <div class="codex-text-magnifier__actions">',
+      '    <button class="codex-text-magnifier__btn codex-text-magnifier__pin" type="button" aria-label="固定放大镜位置" aria-pressed="false" title="固定位置">',
+      '      <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path fill="currentColor" d="M9.5 1.5a1 1 0 0 1 1.7-.71l4 4a1 1 0 0 1-.7 1.71h-1.59l-2.18 3.27.5.5a1 1 0 0 1 0 1.42l-.71.7a1 1 0 0 1-1.41 0L7.4 10.7l-4.69 4.69a.75.75 0 0 1-1.06-1.06L6.34 9.64 4.61 7.91a1 1 0 0 1 0-1.41l.71-.71a1 1 0 0 1 1.41 0l.5.5L10.5 4.1V2.5a1 1 0 0 1 0-1Z"/></svg>',
+      "    </button>",
+      '    <button class="codex-text-magnifier__btn codex-text-magnifier__copy" type="button" aria-label="复制放大文本" title="复制">',
+      '      <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path fill="currentColor" d="M5 1.5A1.5 1.5 0 0 1 6.5 0h6A1.5 1.5 0 0 1 14 1.5v9A1.5 1.5 0 0 1 12.5 12h-6A1.5 1.5 0 0 1 5 10.5v-9Zm1.5 0v9h6v-9h-6Z"/><path fill="currentColor" d="M2 4.5A1.5 1.5 0 0 1 3.5 3H4v1.5h-.5v9h6V13H11v1.5A1.5 1.5 0 0 1 9.5 16h-6A1.5 1.5 0 0 1 2 14.5v-10Z"/></svg>',
+      "    </button>",
+      '    <button class="codex-text-magnifier__btn codex-text-magnifier__close" type="button" aria-label="关闭文本放大镜" title="关闭">×</button>',
+      "  </div>",
       "</div>",
       '<div class="codex-text-magnifier__body"></div>'
     ].join("");
@@ -412,10 +448,76 @@
     panel.querySelector(".codex-text-magnifier__close").addEventListener("click", () => {
       closeCurrentPanel();
     });
+    panel.querySelector(".codex-text-magnifier__pin").addEventListener("click", () => {
+      togglePinned();
+    });
+    panel.querySelector(".codex-text-magnifier__copy").addEventListener("click", () => {
+      void copyCurrentText();
+    });
 
     document.documentElement.appendChild(panel);
     state.panel = panel;
     return panel;
+  }
+
+  function togglePinned() {
+    setPinned(!state.pinned);
+    showToast(state.pinned ? "已固定放大镜位置" : "已取消固定");
+    if (!state.pinned && state.lastAnchorRect) {
+      queuePositionUpdate(state.lastAnchorRect);
+    }
+  }
+
+  function setPinned(pinned) {
+    state.pinned = Boolean(pinned);
+    if (state.panel) {
+      state.panel.dataset.pinned = state.pinned ? "true" : "false";
+      const pinBtn = state.panel.querySelector(".codex-text-magnifier__pin");
+      if (pinBtn) {
+        pinBtn.setAttribute("aria-pressed", state.pinned ? "true" : "false");
+      }
+    }
+  }
+
+  async function copyCurrentText() {
+    const text = state.currentText;
+    if (!text) {
+      showToast("当前没有可复制的文本");
+      return;
+    }
+
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(text);
+      } else {
+        legacyCopy(text);
+      }
+      showToast("已复制到剪贴板");
+    } catch (error) {
+      try {
+        legacyCopy(text);
+        showToast("已复制到剪贴板");
+      } catch (innerError) {
+        console.warn("Text magnifier copy failed:", innerError || error);
+        showToast("复制失败");
+      }
+    }
+  }
+
+  function legacyCopy(text) {
+    const helper = document.createElement("textarea");
+    helper.value = text;
+    helper.setAttribute("readonly", "");
+    helper.style.position = "fixed";
+    helper.style.top = "-1000px";
+    helper.style.opacity = "0";
+    document.body.appendChild(helper);
+    helper.select();
+    const ok = document.execCommand("copy");
+    helper.remove();
+    if (!ok) {
+      throw new Error("execCommand copy failed");
+    }
   }
 
   function applyPanelSettings() {
@@ -433,6 +535,10 @@
   function positionPanel(anchorRect) {
     const panel = state.panel;
     if (!panel || panel.dataset.visible !== "true") {
+      return;
+    }
+
+    if (state.pinned) {
       return;
     }
 
@@ -534,6 +640,8 @@
 
     const toast = document.createElement("div");
     toast.id = TOAST_ID;
+    toast.setAttribute("role", "status");
+    toast.setAttribute("aria-live", "polite");
     document.documentElement.appendChild(toast);
     state.toast = toast;
     return toast;
