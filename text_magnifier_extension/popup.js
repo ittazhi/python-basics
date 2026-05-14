@@ -23,6 +23,7 @@ init().catch((error) => {
 });
 
 async function init() {
+  renderShortcutHint();
   activeTab = await getActiveTab();
 
   if (!activeTab?.id || !isSupportedPage(activeTab.url)) {
@@ -167,4 +168,25 @@ async function getActiveTab() {
 
 function isSupportedPage(url) {
   return typeof url === "string" && /^https?:\/\//i.test(url);
+}
+
+async function renderShortcutHint() {
+  const target = document.getElementById("shortcut-hint");
+  if (!target || !chrome.commands?.getAll) {
+    return;
+  }
+
+  try {
+    const commands = await chrome.commands.getAll();
+    const command = commands.find((entry) => entry.name === "toggle-magnifier");
+    if (command?.shortcut) {
+      target.textContent = command.shortcut;
+      target.dataset.bound = "true";
+    } else {
+      target.textContent = "未设置";
+      target.dataset.bound = "false";
+    }
+  } catch (error) {
+    console.warn("Failed to read keyboard shortcut:", error);
+  }
 }

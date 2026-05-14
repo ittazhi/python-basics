@@ -131,6 +131,42 @@ async function notifyTab(tabId, message) {
   }
 }
 
+async function applyTabEnabled(tabId, enabled) {
+  const settings = await getSettings();
+  if (enabled) {
+    await ensureContentScript(tabId);
+  }
+  await setTabEnabled(tabId, enabled);
+  await notifyTab(tabId, {
+    type: "text-magnifier:set-enabled",
+    enabled,
+    settings
+  });
+  return { enabled, settings };
+}
+
+async function toggleActiveTab() {
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (!tab?.id || !isSupportedUrl(tab.url)) {
+    return;
+  }
+
+  const next = !(await isTabEnabled(tab.id));
+  try {
+    await applyTabEnabled(tab.id, next);
+  } catch (error) {
+    console.warn("Failed to toggle text magnifier via shortcut:", error);
+  }
+}
+
+if (chrome.commands?.onCommand) {
+  chrome.commands.onCommand.addListener((command) => {
+    if (command === "toggle-magnifier") {
+      void toggleActiveTab();
+    }
+  });
+}
+
 chrome.tabs.onRemoved.addListener((tabId) => {
   void removeTabState(tabId);
 });
@@ -171,21 +207,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       }
 
       case "text-magnifier:set-tab-enabled": {
-        const tabId = message.tabId;
-        const enabled = Boolean(message.enabled);
-        const settings = await getSettings();
-
-        if (enabled) {
-          await ensureContentScript(tabId);
-        }
-
-        await setTabEnabled(tabId, enabled);
-        await notifyTab(tabId, {
-          type: "text-magnifier:set-enabled",
-          enabled,
-          settings
-        });
-        sendResponse({ ok: true, enabled, settings });
+        const result = await applyTabEnabled(message.tabId, Boolean(message.enabled));
+        sendResponse({ ok: true, ...result });
         break;
       }
 

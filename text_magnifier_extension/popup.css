@@ -1,16 +1,36 @@
 :root {
-  color-scheme: light;
+  color-scheme: light dark;
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+
+  --bg-body: linear-gradient(135deg, #eef6ff 0%, #fbfdff 46%, #f3f0ff 100%);
+  --bg-body-overlay-1: radial-gradient(circle at 12% 0%, rgba(255, 255, 255, 0.96), transparent 32%);
+  --bg-body-overlay-2: radial-gradient(circle at 90% 12%, rgba(162, 219, 255, 0.42), transparent 34%);
+  --text-primary: #141924;
+  --text-muted: #606b7d;
+  --text-strong: #111827;
+  --text-secondary: #2d3748;
+  --panel-border: rgba(255, 255, 255, 0.66);
+  --panel-bg-1: radial-gradient(circle at 16% 0%, rgba(255, 255, 255, 0.8), transparent 42%);
+  --panel-bg-2: linear-gradient(145deg, rgba(255, 255, 255, 0.62), rgba(233, 245, 255, 0.4));
+  --panel-bg-3: rgba(255, 255, 255, 0.5);
+  --panel-shadow: 0 14px 34px rgba(21, 31, 48, 0.12), inset 0 1px 0 rgba(255, 255, 255, 0.84), inset 0 -1px 0 rgba(29, 47, 73, 0.06);
+  --status-border: rgba(255, 255, 255, 0.56);
+  --kbd-bg: rgba(255, 255, 255, 0.66);
+  --kbd-border: rgba(20, 29, 48, 0.12);
+  --kbd-shadow: 0 1px 0 rgba(20, 29, 48, 0.08);
+  --accent: #14b8a6;
+  --accent-strong: #1d4ed8;
+  --error: #b42318;
 }
 
 body {
   margin: 0;
   min-width: 340px;
   background:
-    radial-gradient(circle at 12% 0%, rgba(255, 255, 255, 0.96), transparent 32%),
-    radial-gradient(circle at 90% 12%, rgba(162, 219, 255, 0.42), transparent 34%),
-    linear-gradient(135deg, #eef6ff 0%, #fbfdff 46%, #f3f0ff 100%);
-  color: #141924;
+    var(--bg-body-overlay-1),
+    var(--bg-body-overlay-2),
+    var(--bg-body);
+  color: var(--text-primary);
 }
 
 main {
@@ -30,16 +50,13 @@ h1 {
 
 .panel {
   padding: 13px;
-  border: 1px solid rgba(255, 255, 255, 0.66);
+  border: 1px solid var(--panel-border);
   border-radius: 16px;
   background:
-    radial-gradient(circle at 16% 0%, rgba(255, 255, 255, 0.8), transparent 42%),
-    linear-gradient(145deg, rgba(255, 255, 255, 0.62), rgba(233, 245, 255, 0.4)),
-    rgba(255, 255, 255, 0.5);
-  box-shadow:
-    0 14px 34px rgba(21, 31, 48, 0.12),
-    inset 0 1px 0 rgba(255, 255, 255, 0.84),
-    inset 0 -1px 0 rgba(29, 47, 73, 0.06);
+    var(--panel-bg-1),
+    var(--panel-bg-2),
+    var(--panel-bg-3);
+  box-shadow: var(--panel-shadow);
   backdrop-filter: blur(14px) saturate(1.55);
   -webkit-backdrop-filter: blur(14px) saturate(1.55);
 }
@@ -118,18 +135,18 @@ h1 {
 .status {
   margin-top: 12px;
   padding-top: 12px;
-  border-top: 1px solid rgba(255, 255, 255, 0.56);
-  color: #606b7d;
+  border-top: 1px solid var(--status-border);
+  color: var(--text-muted);
   font-size: 12px;
   line-height: 1.45;
 }
 
 .status[data-state="enabled"] {
-  color: #1d4ed8;
+  color: var(--accent-strong);
 }
 
 .status[data-state="error"] {
-  color: #b42318;
+  color: var(--error);
 }
 
 .settings {
@@ -143,25 +160,25 @@ h1 {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  color: #2d3748;
+  color: var(--text-secondary);
   font-size: 13px;
   line-height: 1.35;
 }
 
 .range-row strong {
-  color: #111827;
+  color: var(--text-strong);
   font-size: 12px;
   font-weight: 650;
 }
 
 input[type="range"] {
   width: 100%;
-  accent-color: #14b8a6;
+  accent-color: var(--accent);
 }
 
 @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
   .panel {
-    background: rgba(255, 255, 255, 0.94);
+    background: var(--panel-bg-3);
   }
 }
 
@@ -173,5 +190,75 @@ input[type="range"] {
   flex: 0 0 auto;
   width: 16px;
   height: 16px;
-  accent-color: #14b8a6;
+  accent-color: var(--accent);
+}
+
+.hint {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px dashed var(--status-border);
+  display: grid;
+  gap: 8px;
+}
+
+.hint-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.hint-tip {
+  margin: 0;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+
+.hint-tip strong {
+  color: var(--text-strong);
+  font-weight: 600;
+}
+
+kbd {
+  display: inline-block;
+  min-width: 22px;
+  padding: 2px 6px;
+  border: 1px solid var(--kbd-border);
+  border-radius: 6px;
+  background: var(--kbd-bg);
+  color: var(--text-strong);
+  font: 11px/1.2 ui-monospace, "SF Mono", "Cascadia Code", Menlo, monospace;
+  box-shadow: var(--kbd-shadow);
+}
+
+kbd[data-bound="false"] {
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg-body: linear-gradient(135deg, #0c1322 0%, #121a2c 46%, #1a1430 100%);
+    --bg-body-overlay-1: radial-gradient(circle at 12% 0%, rgba(80, 120, 200, 0.32), transparent 36%);
+    --bg-body-overlay-2: radial-gradient(circle at 92% 14%, rgba(80, 200, 240, 0.18), transparent 38%);
+    --text-primary: #e8eefa;
+    --text-muted: #8694ad;
+    --text-strong: #f5f8ff;
+    --text-secondary: #c5cee0;
+    --panel-border: rgba(255, 255, 255, 0.14);
+    --panel-bg-1: radial-gradient(circle at 16% 0%, rgba(255, 255, 255, 0.12), transparent 42%);
+    --panel-bg-2: linear-gradient(145deg, rgba(30, 42, 64, 0.7), rgba(22, 32, 52, 0.5));
+    --panel-bg-3: rgba(18, 26, 44, 0.66);
+    --panel-shadow: 0 14px 34px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.08), inset 0 -1px 0 rgba(0, 0, 0, 0.4);
+    --status-border: rgba(255, 255, 255, 0.12);
+    --kbd-bg: rgba(255, 255, 255, 0.08);
+    --kbd-border: rgba(255, 255, 255, 0.18);
+    --kbd-shadow: 0 1px 0 rgba(0, 0, 0, 0.4);
+    --accent: #2dd4bf;
+    --accent-strong: #93c5fd;
+    --error: #fca5a5;
+  }
 }
